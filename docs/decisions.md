@@ -110,3 +110,28 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
 - **Why:**
   - With a tick-based window, a congested server that completed nothing in the last 10 ticks would have no R̄ data and look *attractive*. The count-based window keeps the most recent evidence.
   - At the start of a run, every server really is empty, so 0 is the true value, not a guess.
+
+## D13 — Tick order: dispatch → sample → step
+- **Decision:** Each tick, (1) every task arriving at t is dispatched and starts at t if it fits, (2) each server samples CPU/memory and a per-tick row is logged, (3) running tasks progress and queued tasks start at t+1.
+  This supersedes the "step, then sample" order first sketched in architecture.md.
+- **Alternatives:** Step, then sample (records the state *after* the tick).
+- **Why:**
+  - Sampling after the step misses any task that starts and finishes within one tick (`work ≤ speed`). Utilisation would be under-counted, mostly on the fastest server.
+  - Sampling after dispatch records exactly the tasks that consumed capacity during tick t, so `Σ cpu% × cores × speed` over the log equals the core-seconds actually delivered.
+  - Tasks are dispatched on arrival (no central queue). Waiting happens only in the server's local FIFO queue (D11), so a policy's choice is final and its cost appears as response time.
+
+## D14 — Run termination and the simulator's interface
+- **Decision:**
+  - `simulate(tasks, policy, specs, window, sim)` rebuilds servers and calls `policy.reset()` on every call.
+  - It drains until all servers are idle (D4). `SimulationConfig.max_ticks` (200,000) is a safety cap: hitting it stops the run with `drained=False` and the unfinished tasks flagged `completed=False` with a NaN response time.
+  - `max_ticks` must exceed the last arrival, so every task is always dispatched and logged.
+  - `Policy.decision_info()` (default `{}`) lets a policy attach fields such as `p_risk` and `capacity_pressure` to each task row without the simulator knowing about specific policies.
+  - The simulator never sees R_SLA. SLA status is derived in `evaluation.py`.
+- **Why:**
+  - The spec (§3.6) allows either draining or counting unfinished tasks explicitly. The cap uses the second as a fallback, so a diverging policy can't hang the experiment or silently drop tasks.
+  - Keeping R_SLA out of the run makes it impossible for the threshold to influence behaviour.
+
+## D15 — Tick quantisation inflates effective load by about 10% (measured, kept)
+- **Observation (Phase 3, seed 0):** Offered load is 0.662, but delivered core-seconds are about 1.10× the required ones, because a task reserves its cores for `ceil(work/speed)` whole ticks. The effective cluster load is therefore about 72%, not 65%.
+- **Decision:** Keep it. It applies identically to every policy, so the comparison stays fair. It is reported in the write-up rather than "fixed" by retuning λ₀ after looking at results.
+- **Alternative:** A smaller tick (e.g. 0.1 s), at about 10× the runtime.

@@ -24,6 +24,13 @@ _(Fill in after Phase 7, once the results exist.)_
 - **σ = 0 must be exact:** floating-point mean/std of ten identical values can give σ ≈ 1e-15 instead of 0, which would skip the deterministic rule and give z ≈ ±1e16. So `std()` returns exactly 0.0 when max == min.
 - **Fairness:** `build_servers()` creates fresh servers for each run. A test checks that two builds share no state.
 ### Phase 3 — Simulator + Round Robin
+- **Loop per tick:** dispatch arrivals → sample metrics → step. Sampling *before* the step is deliberate. Otherwise a task that starts and ends inside one tick never shows up in utilisation (D13). A test checks this exact case.
+- **One loop for every policy:** `simulate(tasks, policy)` builds fresh servers and calls `policy.reset()` itself, so reusing a policy object can't leak state between runs. A determinism test runs the same policy object twice and requires identical DataFrames.
+- **Policy-agnostic logging:** `decision_info()` lets the probabilistic policy attach `p_risk` and `capacity_pressure` to each task row, without `if policy == ...` branches in the simulator.
+- **Termination:** drain until idle. A `max_ticks` cap turns a runaway run into explicit `completed=False` rows instead of a hang or silently dropped tasks.
+- **Sanity check (D9 → D15):** offered load is 0.662 ≈ 0.65 target ✓. But whole-tick reservation (`ceil(work/speed)`) delivers about 1.10× the needed core-seconds, so the effective load is about 72%. It's kept because it is identical for all policies, and documented rather than retuned after seeing results.
+- **Round Robin result (seed 0):** server 4 has 1/37 of capacity but receives 1/5 of the tasks. Its mean response is about 3,800 s and the drain takes about 7,500 ticks, with 60% SLA violations overall. Servers 2 and 3 sit at about 35%. This is capacity-blindness made visible, and the motivation for every later baseline.
+- **Engineering:** `pythonpath` in pytest config doesn't help `python -m experiments...`. The fix was a proper `src`-layout editable install (`pip install -e .`).
 ### Phase 4 — Baselines
 ### Phase 5 — Probabilistic policy
 ### Phase 6 — Metrics & experiments
@@ -38,6 +45,7 @@ _(Fill in after Phase 7, once the results exist.)_
 5. Why is the risk-free weighted-metric baseline the most important one?
 6. Why does Power of Two Choices work so well for how little it does?
 7. Why drain the queue at the end? What bias does a hard cutoff introduce?
+   *(Phase 3)* A cutoff drops exactly the tasks stuck behind overload, the slowest ones, so the policies that overload servers look *better*. With RR at seed 0, most of server 4's ~800 tasks would be unfinished at t=1000, and its 3,800 s mean response would vanish from the average.
 8. Lower load imbalance isn't automatically better. Why?
 9. How would this run on a real cloud? (Metrics source: Prometheus or CloudWatch; LB: Envoy, NGINX or a K8s scheduler plugin.)
 10. Limitations, and what you'd do next. (Real traces, a correlated risk model, tuning the weights, prediction after assignment.)

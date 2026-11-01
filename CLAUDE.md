@@ -9,6 +9,7 @@ Python simulation against 6 baselines under stable and bursty workloads.
 ## Commands (PowerShell, from repo root)
 ```
 .venv\Scripts\Activate.ps1
+pip install -e .          # once: makes `lbsim` importable outside pytest
 python -m pytest -q
 python -m experiments.run_all
 ```
@@ -45,7 +46,7 @@ python -m experiments.run_all
 - [x] 0 Foundation: spec, docs, skeleton
 - [x] 1 Config + workload generator (stable/bursty, seeded)
 - [x] 2 Server model + rolling MetricWindow
-- [ ] 3 Simulator loop + Round Robin, working end to end
+- [x] 3 Simulator loop + Round Robin, working end to end
 - [ ] 4 Baselines: WRR, Random, LeastCPU, WeightedMetric, P2C
 - [ ] 5 Probabilistic policy + edge-case tests
 - [ ] 6 Evaluation metrics + multi-seed runner

@@ -8,14 +8,14 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
    └─► list[Task]  (generated ONCE per seed, reused by every policy)    │
                                    │                                    │
         ┌──────────────────────────▼──────────────────────────────────┐ │
-        │ Simulator.run(tasks, servers, policy)   — one tick at a time│◄┘
-        │  1. move arrived tasks into the dispatch queue              │
-        │  2. for each queued task: sid = policy.select(servers, task)│
-        │  3. servers[sid].assign(task)                               │
-        │  4. every server.step(): progress work, finish tasks        │
-        │  5. every server samples C, M, R into its MetricWindow      │
-        │  6. Recorder logs per-task + per-tick rows                  │
-        │  stop arrivals at T_sim, then drain until all tasks finish  │
+        │ simulate(tasks, policy) — one tick at a time, fresh servers │◄┘
+        │  1. for each task arriving now:                             │
+        │       sid = policy.select(servers, task); assign(task)      │
+        │  2. every server samples C, M into its MetricWindow and a   │
+        │     per-(tick, server) row is logged          (D13)         │
+        │  3. every server.step(): progress work, finish tasks        │
+        │     (finished tasks push R into the response window)        │
+        │  arrivals end with the task list; drain until idle (D4/D14) │
         └──────────────────────────┬──────────────────────────────────┘
                                    │ pandas DataFrames
                          evaluation.py  → 6 metrics per (policy, workload, seed)
@@ -42,10 +42,11 @@ class Policy(ABC):
     name: str
     def reset(self) -> None: ...                           # clear state between runs (e.g. RR pointer)
     def select(self, servers: Sequence[Server], task: Task) -> int: ...   # returns a server index
+    def decision_info(self) -> Mapping[str, float | bool]: ...           # extra per-task log fields, default {}
 ```
 - Policies only **read** server state. They never modify it.
 - Randomised policies (Random, P2C) receive their own seeded `numpy.random.Generator` in `__init__`, so their randomness doesn't shift the workload's random stream.
-- `ProbabilisticPolicy` also exposes the last decision's `P_risk` and the capacity-pressure flag, so the Recorder can log them.
+- `ProbabilisticPolicy` exposes the last decision's `P_risk` and the capacity-pressure flag through `decision_info()`, so the simulator logs them with the task.
 
 ## Fairness guarantees
 1. The task list is generated once per (workload, seed) and passed unchanged to every policy.

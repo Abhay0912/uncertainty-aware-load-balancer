@@ -105,6 +105,15 @@ class ExperimentConfig:
             raise ValueError("need at least one seed")
 
 
+@dataclass(frozen=True)
+class SimulationConfig:
+    max_ticks: int = 200_000
+
+    def __post_init__(self) -> None:
+        if self.max_ticks < 1:
+            raise ValueError("max_ticks must be >= 1")
+
+
 def validate_fit(servers: tuple[ServerSpec, ...], workload: WorkloadConfig) -> None:
     """Every task (including burst-inflated CPU) must fit on the smallest server."""
     if workload.cpu_high * workload.burst_cpu_mult > min(s.cores for s in servers):
@@ -126,5 +135,6 @@ WRR_WEIGHTS: tuple[float, ...] = tuple(s.cores * s.speed for s in SERVERS)
 WORKLOAD = WorkloadConfig()
 SCORING = ScoringConfig(r_ref=WORKLOAD.work_mean)
 EXPERIMENT = ExperimentConfig(r_sla=3.0 * WORKLOAD.work_mean)
+SIMULATION = SimulationConfig()
 
 validate_fit(SERVERS, WORKLOAD)

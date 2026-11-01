@@ -243,3 +243,33 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
 - **Calibration:** mean chosen P_risk 0.62 vs observed load-signal overload 0.62 (stable); 0.74 vs 0.72 (bursty). It is well calibrated, and still non-discriminative (D21).
 - **Context:** least_cpu and weighted_metric are the best baselines. P2C is notably worse with 5 servers (24.8 s stable). RR and Random diverge (~850 s) because they ignore the 0.5-speed server's backlog.
 - **Status:** the primary outcome (spec §6) is **not met** at the pre-declared parameters. Phase 7 sensitivity (θ on the load signal, admission threshold, weights) will test whether any setting changes that, across all seeds, and report it either way.
+
+## D25 — Thresholds may exceed 100% on the load signal
+- **Decision:** `ScoringConfig` accepts any θ > 0 when `count_queued=True`. With `count_queued=False` (utilisation, bounded by 100) θ must still be ≤ 100.
+- **Why:** the D19 load signal is unbounded above (backlog counts), so "θ_C = 120%" is a meaningful question: flag a server once its backlog exceeds 20% of capacity. On utilisation a θ above 100 could never be crossed, so P would be 0 for every server.
+- **Defaults unchanged:** θ = 80/85 stays frozen. Larger values are used only as sensitivity points (D26).
+
+## D26 — Sensitivity design: one axis at a time plus one interaction grid, paired against the ablation, fixed yardstick
+- **Decision:**
+  - Axes, chosen in advance (D21/D24) and stored in `config.SensitivityConfig`:
+    - θ_C ∈ {60, 80, 100, 120, 150} with θ_M = θ_C + 5
+    - admission threshold ∈ {0.3, 0.5, 0.7, 0.9, 1.0}
+    - risk weight w_R ∈ {0, 0.2, 0.4, 0.6, 0.8}, so S = (1−w_R)·L + w_R·P_risk
+    - window W ∈ {5, 10, 20, 40}
+  - Each axis is varied alone around the frozen defaults (OAT), plus one θ × admission grid, because D21 predicts those two interact: θ sets *whether* servers look risky, and admission decides what that does.
+  - At every point, `probabilistic` and `weighted_metric` run under the **same** `ScoringConfig` on the same task list (2 workloads × 5 seeds). The report is the paired Δ with seed wins, as in D23.
+  - Outcome metrics are always evaluated at the frozen θ = 80/85 and R_SLA. If the knob also moved the yardstick, a higher θ would "reduce overload" by definition.
+  - Identical configs are simulated once. WeightedMetric is cached on the only fields it reads (W, load weights, R_ref, signal).
+- **Alternatives:** a full factorial grid (5×5×5×4 = 500 points, mostly uninterpretable); a random or Latin-hypercube search (this is optimisation, not sensitivity).
+- **Why:** OAT answers "does the conclusion depend on this choice?", one axis at a time, which is the question D24 left open. One targeted grid covers the interaction the diagnostics predicted.
+- **Caveat (multiple comparisons):** about 40 points × 2 workloads × several metrics means some 5/5 win cells will appear by chance (each has p ≈ 0.03). A setting only counts if it fits a consistent trend along its axis, and the defaults stay frozen whatever the sweep shows.
+
+## D27 — Observation: the null result is robust to every swept setting (Phase 7, measured)
+- **Result (paired Δ = probabilistic − weighted_metric, 5 seeds, outcomes at the frozen θ/R_SLA):**
+  - **θ:** raising θ_C to 150 cuts stable capacity pressure from 57% to 10%, and Δ shrinks toward 0 (+0.29 s → −0.03 s) without ever becoming a consistent win. Bursty pressure stays at 67–80% at every θ, because burst load reaches 10–20× capacity (fig 4), above any plausible threshold. Bursty Δ jumps sign from point to point with no trend.
+  - **Admission:** the only consistent pattern. With threshold 1.0 (no filtering, the risk term only enters S) stable response is −0.08 s, **5/5 wins**, and bursty is −0.20 s (4/5). That's about a 1% effect, and SLA Δ is still inside ±1 std. Read together with the risk-weight axis, the **admission rule is what hurts on stable**, and a small risk term inside S is neutral to slightly helpful.
+  - **Risk weight:** stable gets steadily *worse* as w_R grows (+0.19 s at 0.2 → +0.73 s at 0.8, 0/5 wins everywhere). Bursty stays flat around 0.
+  - **Window:** W = 40 is marginally better than W = 10 on both workloads (3–4/5 wins), and inside the noise.
+  - **θ × admission grid:** no region of consistent improvement. The best bursty cell (θ 100, admission 0.5: −0.8 pp SLA, 4/5) has worse neighbours on every side, which fits chance among ~50 cells (D26 caveat).
+- **Interpretation:** the only settings that help are the ones that *weaken* the risk machinery, by moving Δ toward 0. Under bursts every server is far above any threshold at once, so P_risk ≈ 1 everywhere and carries no ranking information (D21 holds whatever θ is). The primary outcome is not met at any swept setting.
+- **Status:** defaults stay frozen (θ 80/85, admission 0.5, w_R 0.4, W 10). The write-up reports the admission-1.0 finding as an observation, not a retuned headline.

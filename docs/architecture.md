@@ -21,6 +21,8 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
                          evaluation.py  → spec §6 metrics per (policy, workload, seed) (D22)
                                    │
                     experiments/run_all.py → results/runs.csv, summary.csv, paired.csv (D23)
+                    experiments/sensitivity.py → results/sensitivity.csv (sensitivity.py, D26)
+                    experiments/plots.py → results/figures/fig1–fig6.png
 ```
 
 ## Module responsibilities
@@ -35,7 +37,10 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
 | `policies/*.py` | One policy per file: RR, WRR, Random, LeastCPU, WeightedMetric, P2C, Probabilistic. |
 | `simulator.py` | The time-stepped loop, queue draining, and recording. Knows nothing about specific policies. |
 | `evaluation.py` | Pure functions: logs → metrics (`evaluate`), seed aggregation (`summarise_runs`), paired ablation comparison (`paired_differences`). |
-| `experiments/run_all.py` | Runs every policy × workload × seed (`--seeds`, `--out`), then writes the CSVs. Plots arrive in Phase 7. |
+| `experiments/run_all.py` | Runs every policy × workload × seed (`--seeds`, `--out`), then writes the CSVs. |
+| `sensitivity.py` | Sweep points (`apply_axis`, `sweep_points`), paired target-vs-ablation runs under one config with a WM cache (`run_sweep`), and the per-point paired table (`sensitivity_table`). Outcomes are always scored at the frozen thresholds (D26). |
+| `experiments/sensitivity.py` | Runs the sweep over every workload × seed and writes `sensitivity_runs.csv` / `sensitivity.csv` (about 200 s). |
+| `experiments/plots.py` | Reads the CSVs and writes six PNGs. It re-simulates one bursty seed for the load time series. |
 
 ## Policy contract
 ```python

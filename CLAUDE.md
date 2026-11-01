@@ -12,6 +12,8 @@ Python simulation against 6 baselines under stable and bursty workloads.
 pip install -e .          # once: makes `lbsim` importable outside pytest
 python -m pytest -q
 python -m experiments.run_all
+python -m experiments.sensitivity   # ~200 s
+python -m experiments.plots         # -> results/figures/
 ```
 
 ## Layout
@@ -23,8 +25,9 @@ python -m experiments.run_all
   - `simulator.py`
   - `scoring.py`
   - `evaluation.py`
+  - `sensitivity.py`
   - `policies/` (`base.py` + one file per policy)
-- `experiments/run_all.py`: the experiment driver, which writes to `results/` (gitignored)
+- `experiments/`: `run_all.py` (main matrix), `sensitivity.py` (sweep), `plots.py` (figures). All write to `results/` (gitignored)
 - `tests/`: pytest. `pyproject.toml` puts `src` on the path.
 
 ## Conventions
@@ -51,5 +54,5 @@ python -m experiments.run_all
 - [x] 4 Baselines: WRR, Random, LeastCPU, WeightedMetric, P2C
 - [x] 5 Probabilistic policy + edge-case tests
 - [x] 6 Evaluation metrics + multi-seed runner
-- [ ] 7 Plots + sensitivity analysis
+- [x] 7 Plots + sensitivity analysis
 - [ ] 8 README, results write-up, interview pack

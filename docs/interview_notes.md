@@ -70,12 +70,35 @@ _(Fill in after Phase 7, once the results exist.)_
 - **Throughput caveat:** when everything drains, throughput ≈ n_tasks ÷ makespan, so the last task to finish sets it. It only separates policies with long backlogs (RR 0.49/s vs ~3.9/s).
 - **Interview soundbite:** "I compared against the ablation that differs by exactly one term, paired by seed, and counted wins. Over five seeds the risk term didn't help. The diagnostics explain why, and I didn't move the thresholds after seeing it."
 ### Phase 7 — Plots & sensitivity
+- **Figures (`results/figures/`):**
+  1. policy comparison (log response, SLA %, ±std over seeds)
+  2. per-seed paired Δ against the ablation
+  3. calibration scatter (P_risk vs observed overload, on the y = x line)
+  4. bursty load time series (log scale)
+  5. one-axis-at-a-time sensitivity
+  6. θ × admission heatmap with win counts
+- **Sensitivity design (D26):** each axis is varied alone around the frozen defaults, plus one interaction grid (θ × admission) that the diagnostics predicted. That's 44 points × 10 streams in about 200 s. At every point the *ablation is rerun under the same config*, so Δ still isolates the risk term.
+- **Fixed yardstick:** outcomes are always scored at θ = 80/85 and R_SLA = 18 s. If the swept θ also defined "overload", θ = 150 would win by definition.
+- **θ above 100% (D25):** this is only meaningful on the load signal (backlog counts). It's still rejected on utilisation, where it could never be crossed.
+- **Result (D27):** no setting meets the primary outcome.
+  - Raising θ cuts *stable* capacity pressure (57% → 10%), but bursty pressure stays at 67–80%. Fig 4 shows why: bursts push every server to 10–20× capacity at once, so no threshold can separate them.
+  - The only consistent signal is that turning admission **off** (threshold 1.0) gives a ~1% response win on stable (5/5 seeds). The admission rule was the part that hurt. A larger risk weight makes stable steadily worse.
+  - Pattern: every setting that helps does so by *weakening* the risk machinery.
+- **Multiple comparisons:** with about 50 grid cells, a few 4/5 or 5/5 cells appear by chance (p ≈ 0.03 each). The rule I used: believe a cell only if it fits a trend along its axis. The best bursty cell has worse neighbours on every side, so it's noise.
+- **Plotting craft:**
+  - one y-axis per panel (no dual axes)
+  - a fixed colour per workload across every figure
+  - a diverging blue–gray–red colormap centred at 0 for Δ
+  - a log scale where values span 3 orders of magnitude
+  - legends kept off the data
+- **Interview soundbite:** "I pre-declared the sensitivity axes, reran the ablation at every point, and kept the evaluation thresholds fixed. The null result held everywhere. The time series shows the mechanism: bursts saturate every server at once, so a per-server risk score has nothing to rank."
 ### Phase 8 — Wrap-up
 
 ## Question bank (answer each as its phase completes)
 1. Why isn't Least Loaded enough? What does variance add?
    *(Phase 5)* Same mean, different σ means a different tail probability of crossing θ (60% steady → P=0; 60% ± 30 → P≈0.25). In practice here, a load-aware balancer equalises servers, so the extra information shrinks (D21). Variance helps most when servers differ in volatility and the threshold sits near the operating point.
 2. Utilisation is bounded to [0,100], and W=10. Is the normal assumption valid? What would you use instead?
+   *(Phase 7)* Not really. A bounded, autocorrelated, regime-switching signal over 10 samples is far from i.i.d. normal, and the D19 load signal is skewed with heavy bursts. Alternatives: an empirical exceedance frequency over the window (assumption-free but coarse at W=10), an EWMA mean/variance, a log-normal model for the non-negative load, or quantile regression. In practice calibration was still good (fig 3), because the outcome is dominated by the *level* relative to θ, and the shape of the tail matters less. The sensitivity over W (5–40) moved nothing outside the noise.
 3. Why `1 − (1−P_C)(1−P_M)`? What breaks if CPU and memory are correlated?
    *(Phase 5)* It is P(at least one exceeds) = 1 − P(neither), and it needs independence to factor. With positive correlation the true union probability is *lower* (the events overlap), so the formula overestimates risk. The bounds are max(P_C, P_M) ≤ P_union ≤ min(1, P_C + P_M). Our demands are drawn independently (D8), but queued load couples CPU and memory, since both grow with the backlog.
 4. How did you make sure the comparison between policies was fair?

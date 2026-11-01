@@ -83,8 +83,10 @@ class ScoringConfig:
     def __post_init__(self) -> None:
         if self.window < 1:
             raise ValueError("window must be >= 1")
-        if not (0 < self.theta_cpu <= 100 and 0 < self.theta_mem <= 100):
-            raise ValueError("thresholds must be in (0, 100]")
+        if self.theta_cpu <= 0 or self.theta_mem <= 0:
+            raise ValueError("thresholds must be > 0")
+        if not self.count_queued and max(self.theta_cpu, self.theta_mem) > 100:
+            raise ValueError("utilisation signal is bounded by 100, so thresholds must be <= 100 (D25)")
         _check_weights("load_weights", self.load_weights)
         _check_weights("score_weights", self.score_weights)
         if not 0 <= self.risk_admission_threshold <= 1:
@@ -104,6 +106,25 @@ class ExperimentConfig:
             raise ValueError("r_sla must be > 0")
         if not self.seeds:
             raise ValueError("need at least one seed")
+
+
+@dataclass(frozen=True)
+class SensitivityConfig:
+    """One-at-a-time axes around the frozen SCORING defaults, plus a theta x admission grid (D26).
+    theta values set theta_C; theta_M keeps its default offset above theta_C."""
+
+    theta_cpu: tuple[float, ...] = (60.0, 80.0, 100.0, 120.0, 150.0)
+    admission: tuple[float, ...] = (0.3, 0.5, 0.7, 0.9, 1.0)
+    risk_weight: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8)
+    window: tuple[int, ...] = (5, 10, 20, 40)
+    timeseries_workload: str = "bursty"
+    timeseries_seed: int = 0
+
+    def __post_init__(self) -> None:
+        if not all((self.theta_cpu, self.admission, self.risk_weight, self.window)):
+            raise ValueError("every sensitivity axis needs at least one value")
+        if any(not 0 <= w <= 1 for w in self.risk_weight):
+            raise ValueError("risk weights must be in [0, 1]")
 
 
 @dataclass(frozen=True)
@@ -138,5 +159,6 @@ WORKLOAD = WorkloadConfig()
 SCORING = ScoringConfig(r_ref=WORKLOAD.work_mean)
 EXPERIMENT = ExperimentConfig(r_sla=3.0 * WORKLOAD.work_mean)
 SIMULATION = SimulationConfig()
+SENSITIVITY = SensitivityConfig()
 
 validate_fit(SERVERS, WORKLOAD)

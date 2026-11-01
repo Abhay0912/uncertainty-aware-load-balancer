@@ -30,7 +30,8 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
 | `workload.py` | Seeded `Task` generation for the stable and bursty patterns. |
 | `server.py` | Capacity, running tasks and local queue; computes the current CPU %, memory % and response time; owns a `MetricWindow`. |
 | `metric_window.py` | A fixed-length rolling buffer with mean and population std. |
-| `policies/base.py` | The `Policy` abstract base class (Strategy pattern). |
+| `scoring.py` | Pure formulas: `normalised_response`, `load_score` (L_i). Phase 5 adds P_C, P_M, P_risk, S_i. |
+| `policies/base.py` | The `Policy` ABC (Strategy pattern), `RandomizedPolicy` (seeded, rewindable RNG), `policy_rng`, tie-break helper. |
 | `policies/*.py` | One policy per file: RR, WRR, Random, LeastCPU, WeightedMetric, P2C, Probabilistic. |
 | `simulator.py` | The time-stepped loop, queue draining, and recording. Knows nothing about specific policies. |
 | `evaluation.py` | Pure functions: logs → metrics. |

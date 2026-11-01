@@ -32,6 +32,17 @@ _(Fill in after Phase 7, once the results exist.)_
 - **Round Robin result (seed 0):** server 4 has 1/37 of capacity but receives 1/5 of the tasks. Its mean response is about 3,800 s and the drain takes about 7,500 ticks, with 60% SLA violations overall. Servers 2 and 3 sit at about 35%. This is capacity-blindness made visible, and the motivation for every later baseline.
 - **Engineering:** `pythonpath` in pytest config doesn't help `python -m experiments...`. The fix was a proper `src`-layout editable install (`pip install -e .`).
 ### Phase 4 — Baselines
+- **Shared `L_i`:** one pure function (`scoring.load_score`) is used by WeightedMetric, P2C and, later, the probabilistic policy. Then the ablation "with vs. without P_risk" differs in exactly one term.
+- **Live vs. windowed values (D16):** about 4 tasks arrive per tick. If policies read the last *window sample*, all of them see the same snapshot and herd onto one server. Live `cpu_pct` includes the tasks placed earlier in the same tick. The windows are kept for μ, σ and R̄.
+- **Smooth WRR (D17):** the nginx algorithm. It gives exact proportions per 37-task cycle without sending 16 tasks in a row to the big server.
+- **Reproducible randomness:** Random and P2C take a seeded `Generator` from `policy_rng(seed)` (a `SeedSequence([tag, seed])`, separate from the workload streams). `reset()` rewinds the generator state, so rerunning the same policy object gives identical results. Tests check that same seed means same assignments, and a different seed means different ones.
+- **Contract test:** every baseline is run against loaded servers and the full server state is compared before and after, which proves that policies only *read*.
+- **P2C with N=2 is exactly WeightedMetric.** It samples both servers, so it always picks the global minimum. That makes a nice sanity test.
+- **Seed-0 preview (mean response / SLA violation rate):**
+  - stable: WRR 9 s / 9% · WM 236 s / 14% · P2C 588 s / 22% · LeastCPU 907 s / 24% · RR 899 s / 60% · Random 870 s / 59%
+  - bursty: WRR 39 s / 61% · WM 489 s / 34% · P2C 880 s / 40% · LeastCPU 1773 s / 37%
+- **Key finding (D18): utilisation % hides backlog.** The 2-core server has a 424-task queue yet shows only about 62% CPU, because the head-of-line task can't fit next to the running one. Load-aware policies keep feeding it. That's why capacity-aware but load-blind WRR wins here. Interview angle: this is why real systems also look at **queue length / load average** (Linux load average counts *waiting* tasks, not just running ones), not only CPU %.
+- **WRR's bursty weakness:** WRR is still the best on mean response, but it has 61% SLA violations under bursts, because it can't react to a spike. The load-aware policies have a lower SLA violation rate. That's the trade-off the probabilistic policy is meant to address.
 ### Phase 5 — Probabilistic policy
 ### Phase 6 — Metrics & experiments
 ### Phase 7 — Plots & sensitivity
@@ -44,6 +55,7 @@ _(Fill in after Phase 7, once the results exist.)_
 4. How did you make sure the comparison between policies was fair?
 5. Why is the risk-free weighted-metric baseline the most important one?
 6. Why does Power of Two Choices work so well for how little it does?
+   *(Phase 4)* With n balls into n bins, the maximum load drops from Θ(log n / log log n) to Θ(log log n) with just two random probes (Mitzenmacher). It is cheap (O(1) probes) and robust to stale data, because it doesn't herd. Caveat seen here: with only 5 servers and a metric that hides backlog, its two samples often include the hidden-backlog node, so its advantage over Random is real but limited.
 7. Why drain the queue at the end? What bias does a hard cutoff introduce?
    *(Phase 3)* A cutoff drops exactly the tasks stuck behind overload, the slowest ones, so the policies that overload servers look *better*. With RR at seed 0, most of server 4's ~800 tasks would be unfinished at t=1000, and its 3,800 s mean response would vanish from the average.
 8. Lower load imbalance isn't automatically better. Why?

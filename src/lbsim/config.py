@@ -131,6 +131,7 @@ SERVERS: tuple[ServerSpec, ...] = (
 )
 N_SERVERS = len(SERVERS)
 WRR_WEIGHTS: tuple[float, ...] = tuple(s.cores * s.speed for s in SERVERS)
+POLICY_SEED_TAG = 7  # mixed into SeedSequence so policy draws never share a workload stream
 
 WORKLOAD = WorkloadConfig()
 SCORING = ScoringConfig(r_ref=WORKLOAD.work_mean)

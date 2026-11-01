@@ -1,10 +1,12 @@
-"""Run policies over workloads and summarise. Phase 3: Round Robin end to end plus a load sanity check.
-(The full policy x workload x seed runner and results/ output arrive in Phase 6.)"""
+"""Run policies over workloads and summarise. Phase 4: the six baselines on seed 0, one row per policy.
+(Full metrics, the multi-seed runner and results/ output arrive in Phase 6.)"""
 
 from __future__ import annotations
 
+import pandas as pd
+
 from lbsim.config import EXPERIMENT, SERVERS, WORKLOAD
-from lbsim.policies import RoundRobinPolicy
+from lbsim.policies import baseline_policies
 from lbsim.simulator import SimulationResult, simulate
 from lbsim.workload import Workload, generate_workload
 
@@ -37,10 +39,29 @@ def summarise(wl: Workload, res: SimulationResult) -> None:
     print(per_server.to_string())
 
 
+def quick_row(res: SimulationResult) -> dict[str, float | str]:
+    """Preview numbers only; the real metric definitions live in evaluation.py (Phase 6)."""
+    t, st = res.tasks, res.server_ticks
+    per_server_cpu = st.groupby("server_id")["cpu_pct"].mean()
+    return {
+        "policy": res.policy,
+        "mean_resp_s": t["response_time"].mean(),
+        "p95_resp_s": t["response_time"].quantile(0.95),
+        "sla_viol": (t["response_time"] > EXPERIMENT.r_sla).mean(),
+        "ticks": res.n_ticks,
+        "max_queue": st["queue_length"].max(),
+        "cpu_min_srv": per_server_cpu.min(),
+        "cpu_max_srv": per_server_cpu.max(),
+    }
+
+
 def main() -> None:
+    seed = EXPERIMENT.seeds[0]
     for kind in EXPERIMENT.workloads:
-        wl = generate_workload(kind, EXPERIMENT.seeds[0])
-        summarise(wl, simulate(wl.tasks, RoundRobinPolicy()))
+        wl = generate_workload(kind, seed)
+        print(f"\n== {kind} | seed {seed} | {len(wl.tasks)} tasks | offered load {offered_load(wl):.3f} ==")
+        rows = [quick_row(simulate(wl.tasks, p)) for p in baseline_policies(seed)]
+        print(pd.DataFrame(rows).set_index("policy").round(3).to_string())
 
 
 if __name__ == "__main__":

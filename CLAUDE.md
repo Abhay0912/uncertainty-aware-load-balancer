@@ -21,6 +21,7 @@ python -m experiments.run_all
   - `server.py`
   - `metric_window.py`
   - `simulator.py`
+  - `scoring.py`
   - `evaluation.py`
   - `policies/` (`base.py` + one file per policy)
 - `experiments/run_all.py`: the experiment driver, which writes to `results/` (gitignored)
@@ -47,7 +48,7 @@ python -m experiments.run_all
 - [x] 1 Config + workload generator (stable/bursty, seeded)
 - [x] 2 Server model + rolling MetricWindow
 - [x] 3 Simulator loop + Round Robin, working end to end
-- [ ] 4 Baselines: WRR, Random, LeastCPU, WeightedMetric, P2C
+- [x] 4 Baselines: WRR, Random, LeastCPU, WeightedMetric, P2C
 - [ ] 5 Probabilistic policy + edge-case tests
 - [ ] 6 Evaluation metrics + multi-seed runner
 - [ ] 7 Plots + sensitivity analysis

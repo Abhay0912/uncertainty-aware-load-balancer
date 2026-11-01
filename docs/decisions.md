@@ -135,3 +135,33 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
 - **Observation (Phase 3, seed 0):** Offered load is 0.662, but delivered core-seconds are about 1.10× the required ones, because a task reserves its cores for `ceil(work/speed)` whole ticks. The effective cluster load is therefore about 72%, not 65%.
 - **Decision:** Keep it. It applies identically to every policy, so the comparison stays fair. It is reported in the write-up rather than "fixed" by retuning λ₀ after looking at results.
 - **Alternative:** A smaller tick (e.g. 0.1 s), at about 10× the runtime.
+
+## D16 — "Current" load means live state; ties go to the lowest index
+- **Decision:**
+  - The spec's `C_i`, `M_i` ("latest observed") are read live at dispatch time (`server.cpu_pct`, `server.mem_pct`). That includes tasks placed earlier in the same tick.
+  - The rolling windows are used only for what needs history: μ, σ (Phase 5) and R̄.
+  - `L_i` lives in one pure function, `scoring.load_score`, shared by WeightedMetric, P2C and (in Phase 5) the probabilistic policy.
+  - Deterministic policies break ties by lowest server index. P2C breaks ties toward its first draw, which is random.
+- **Alternatives:** `cpu_window.latest()`, the sample taken at the end of the previous tick's dispatch.
+- **Why:**
+  - About 4 tasks arrive per tick (12 or more during bursts). With a once-per-tick snapshot, every arrival in a tick would see the same values and all of them would pile onto one server. That herding comes from our tick size, not from the policy.
+  - A real balancer knows its own placements, so leaving them out would be artificial.
+  - A single shared `L_i` guarantees that WeightedMetric is exactly "the probabilistic policy minus P_risk".
+  - Stale metrics are a legitimate topic, but a separate one. They are future work, not something to mix into this comparison.
+
+## D17 — Smooth Weighted Round Robin (nginx algorithm)
+- **Decision:** Each pick adds w_i to every server's counter, picks the maximum (ties go to the lowest index), then subtracts Σw from the chosen server. Weights = cores × speed = (4, 4, 12, 16, 1), so every 37 picks give exactly w_i to server i, interleaved.
+- **Alternatives:**
+  - Naive block WRR: 16 consecutive tasks to server 3.
+  - Random sampling proportional to the weights.
+- **Why:**
+  - It is deterministic and gives exact proportions every cycle.
+  - It never sends long bursts of tasks to one server. A test asserts that no server is picked more than 2 times in a row.
+
+## D18 — Observation: utilisation % hides queued backlog (Phase 4, seed 0, measured, not yet acted on)
+- **Observation:** Under LeastCPU (stable), server 4 (2 cores) averages a **424-task** local queue during arrivals, but its CPU averages only **62%** while that queue exists.
+  - Strict FIFO plus coarse task sizes (0.5–1.95 cores) on a 2-core node means the head task often doesn't fit beside the running one, so CPU % stalls well below 100%.
+  - Every policy that reads `C_i`/`M_i` therefore sees the most backlogged server as "moderately loaded". LeastCPU sends it 22% of the tasks; its capacity share is 2.7%.
+  - R̄ catches up only slowly, because it comes from completions (D12). WeightedMetric does better (12% share), but is still far off.
+- **Effect:** On stable seed 0, WRR (capacity-aware but load-blind) beats every load-aware baseline by a wide margin: 9 s mean response vs. 236–907 s.
+- **Status:** Open. The baselines implement the spec exactly. Whether the server metric should include queued demand is a server-model question (D11). It is to be decided before Phase 5, because the probabilistic policy reads the same metrics.

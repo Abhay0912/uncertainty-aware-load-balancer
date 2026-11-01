@@ -61,6 +61,14 @@ _(Fill in after Phase 7, once the results exist.)_
 - **But the estimate is calibrated:** mean chosen P_risk is 0.64 vs. an observed exceedance frequency of 0.61. The model predicts well; it just can't *discriminate* between servers.
 - **Interview soundbite:** "The risk model was calibrated but non-discriminative: its threshold sat below the operating point the balancer itself drives every server to. I didn't retune θ after seeing results. It became a pre-declared sensitivity axis."
 ### Phase 6 — Metrics & experiments
+- **The matrix:** 7 policies × 2 workloads × 5 seeds = 70 runs in about 26 s. Each (workload, seed) task list is generated **once** and shared by all 7 policies, and the servers are rebuilt per run. Outputs: `runs.csv`, `summary.csv` (mean ± std), `paired.csv`.
+- **Metric windows (D22):** response time and SLA come from completed tasks, with unfinished ones counted, never dropped. Throughput spans the whole run including the drain. Utilisation, imbalance and overload average over the arrival horizon [0, T_sim). Otherwise RR's 8,500-tick drain tail would dominate them.
+- **Two overload numbers:** on true utilisation (the spec's metric) and on the load signal (what P_risk actually predicts). Calibration has to compare a prediction with the quantity it predicts.
+- **Paired, not pooled (D23):** with matched seeds, compare per-seed differences against the ablation. Report mean Δ, std Δ and wins out of 5. A sign test with 5/5 wins gives p = 1/32 ≈ 0.03. With 5 seeds a CI is wide and assumption-heavy, while a win count is honest.
+- **The result (D24):** probabilistic ≈ weighted_metric. Stable: slightly *worse* on all 5 seeds (+0.29 s, +0.7 pp SLA). Bursty: no detectable difference (+0.2 s ± 0.85, SLA +0.4 pp ± 1.8, 2–3/5 wins). Its only edge is bursty utilisation overload, −1.1 pp (4/5 wins), which is inside the noise. **The primary outcome is not met at the pre-declared parameters.**
+- **Still calibrated:** mean P_risk 0.62 vs observed load overload 0.62 (stable), 0.74 vs 0.72 (bursty). The model predicts the *level* correctly but can't rank servers, because they all sit at the same level (D21).
+- **Throughput caveat:** when everything drains, throughput ≈ n_tasks ÷ makespan, so the last task to finish sets it. It only separates policies with long backlogs (RR 0.49/s vs ~3.9/s).
+- **Interview soundbite:** "I compared against the ablation that differs by exactly one term, paired by seed, and counted wins. Over five seeds the risk term didn't help. The diagnostics explain why, and I didn't move the thresholds after seeing it."
 ### Phase 7 — Plots & sensitivity
 ### Phase 8 — Wrap-up
 
@@ -71,6 +79,7 @@ _(Fill in after Phase 7, once the results exist.)_
 3. Why `1 − (1−P_C)(1−P_M)`? What breaks if CPU and memory are correlated?
    *(Phase 5)* It is P(at least one exceeds) = 1 − P(neither), and it needs independence to factor. With positive correlation the true union probability is *lower* (the events overlap), so the formula overestimates risk. The bounds are max(P_C, P_M) ≤ P_union ≤ min(1, P_C + P_M). Our demands are drawn independently (D8), but queued load couples CPU and memory, since both grow with the backlog.
 4. How did you make sure the comparison between policies was fair?
+   *(Phase 6)* The task list is generated once per (workload, seed) and passed unchanged to every policy. Servers are rebuilt and `policy.reset()` is called per run. Randomised policies draw from their own seeded stream, so they can't shift the workload. Every policy runs through one simulator loop and one drain rule. R_SLA and θ were frozen before the results (and R_SLA never enters the simulator). Comparisons are paired by seed against the one-term ablation.
 5. Why is the risk-free weighted-metric baseline the most important one?
    *(Phase 5)* It is the proposed method minus exactly one term. A test proves that setting the risk weight to 0 and disabling admission reproduces it bit for bit. Beating RR only shows that load-awareness helps; beating WM is the only evidence that *uncertainty* helps.
 6. Why does Power of Two Choices work so well for how little it does?
@@ -78,5 +87,6 @@ _(Fill in after Phase 7, once the results exist.)_
 7. Why drain the queue at the end? What bias does a hard cutoff introduce?
    *(Phase 3)* A cutoff drops exactly the tasks stuck behind overload, the slowest ones, so the policies that overload servers look *better*. With RR at seed 0, most of server 4's ~800 tasks would be unfinished at t=1000, and its 3,800 s mean response would vanish from the average.
 8. Lower load imbalance isn't automatically better. Why?
+   *(Phase 6)* The servers are heterogeneous (speeds 0.5–2.0). Equal utilisation % on a 0.5-speed node means its tasks take 4× longer than on the fastest one. Imbalance is measured on utilisation %, which ignores speed and queues. In the data, least_cpu has the lowest imbalance (12.1) but weighted_metric has equal or better response. RR's imbalance (22.6) is a *symptom* of the one hidden-backlog node, not the cause. So it's a context metric, not a target.
 9. How would this run on a real cloud? (Metrics source: Prometheus or CloudWatch; LB: Envoy, NGINX or a K8s scheduler plugin.)
 10. Limitations, and what you'd do next. (Real traces, a correlated risk model, tuning the weights, prediction after assignment.)

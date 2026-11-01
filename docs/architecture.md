@@ -18,9 +18,9 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
         │  arrivals end with the task list; drain until idle (D4/D14) │
         └──────────────────────────┬──────────────────────────────────┘
                                    │ pandas DataFrames
-                         evaluation.py  → 6 metrics per (policy, workload, seed)
+                         evaluation.py  → spec §6 metrics per (policy, workload, seed) (D22)
                                    │
-                    experiments/run_all.py → results/*.csv + plots
+                    experiments/run_all.py → results/runs.csv, summary.csv, paired.csv (D23)
 ```
 
 ## Module responsibilities
@@ -34,8 +34,8 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
 | `policies/base.py` | The `Policy` ABC (Strategy pattern), `RandomizedPolicy` (seeded, rewindable RNG), `policy_rng`, tie-break helper. |
 | `policies/*.py` | One policy per file: RR, WRR, Random, LeastCPU, WeightedMetric, P2C, Probabilistic. |
 | `simulator.py` | The time-stepped loop, queue draining, and recording. Knows nothing about specific policies. |
-| `evaluation.py` | Pure functions: logs → metrics. |
-| `experiments/run_all.py` | Runs every policy × workload × seed, then writes CSVs and plots. |
+| `evaluation.py` | Pure functions: logs → metrics (`evaluate`), seed aggregation (`summarise_runs`), paired ablation comparison (`paired_differences`). |
+| `experiments/run_all.py` | Runs every policy × workload × seed (`--seeds`, `--out`), then writes the CSVs. Plots arrive in Phase 7. |
 
 ## Policy contract
 ```python

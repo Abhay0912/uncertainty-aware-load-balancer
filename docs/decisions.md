@@ -211,3 +211,35 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
   - The risk *estimate* is reasonably calibrated: the mean P_risk of the chosen server is 0.64, and the observed fraction of server-intervals with signal > 80 is 0.61 (stable).
   - With `count_queued=False` (utilisation signal), pressure falls to 1–2% and the admission rule does discriminate. But the policy inherits the D18 backlog blindness (593 s mean response on stable).
 - **Status:** Reported as measured. θ_C/θ_M were fixed before results (spec §8), and changing them now would tune toward a desired outcome. θ on the load signal (e.g. 100%) and the admission threshold become Phase 7 sensitivity axes, run across all seeds and reported whatever they show.
+
+## D22 — Metric windows: task metrics over completions, interval metrics over the arrival horizon
+- **Decision:**
+  - Response time (mean, p95) and SLA rate use the K *completed* tasks. Unfinished tasks (only possible if `max_ticks` is hit, D14) are reported as `n_unfinished`, never silently dropped.
+  - Throughput = completed ÷ makespan (whole run, drain included), as in D4.
+  - Avg CPU utilisation, load imbalance and overload fraction average the per-(tick, server) rows over **[0, T_sim)** only.
+  - Overload is strict (`C > θ_C or M > θ_M`, as in D6) and is reported twice: on true utilisation (`overload_frac_util`, the spec's literal metric) and on the D19 load signal (`overload_frac_load`, the quantity P_risk actually predicts, so it's the fair calibration target).
+  - Avg utilisation is the spec's unweighted mean over servers (1/N), not capacity-weighted.
+  - `mean_p_risk` / `capacity_pressure_rate` are NaN / 0 for policies that don't log them.
+- **Alternatives:** average the interval metrics over the whole run.
+- **Why:** RR drains for about 8,500 ticks against about 1,000 for the others. Over the whole run, its utilisation would look low and its imbalance would be dominated by one slow server grinding through a backlog alone. That measures the drain tail, which throughput and makespan already capture. The arrival horizon is the only window where every policy faces the identical offered load.
+- **Cost:** throughput ≈ n_tasks ÷ makespan, so when everything drains it is set by the *last* task to finish. It is noisy, and it only separates policies that build long backlogs.
+
+## D23 — Multi-seed reporting: paired differences and win counts, no confidence intervals
+- **Decision:**
+  - `runs.csv` holds one row per (workload, seed, policy). `summary.csv` holds the mean and sample std (ddof=1) across seeds.
+  - `paired.csv` holds probabilistic − weighted_metric per seed: mean, std, and the number of seeds on which the target won.
+- **Alternatives:** t-based 95% CIs (needs SciPy or a hard-coded t-table value); bootstrap CIs.
+- **Why:**
+  - Matched seeds share one task list, so the paired difference cancels workload noise. That's the same logic as a paired t-test.
+  - With n = 5, a CI is wide and leans on a normality assumption. "Won 0/5 seeds" is honest, assumption-free (a sign test: 5/5 has p = 1/32 ≈ 0.03 one-sided), and easy to explain.
+  - The comparison is against the ablation baseline, because it differs from the proposed method by exactly the P_risk term (D20).
+
+## D24 — Observation: across 5 seeds, the probabilistic policy matches but does not beat the ablation (Phase 6, measured)
+- **Result (mean over seeds 0–4; probabilistic vs weighted_metric):**
+  - stable: 6.44 s vs 6.15 s mean response, 3.4% vs 2.7% SLA violations. Probabilistic is worse on **all 5 seeds** for both (Δ = +0.29 s, +0.7 pp).
+  - bursty: 29.5 s vs 29.3 s, 53.9% vs 53.5% SLA violations. Δ is +0.18 s ± 0.85 s and +0.4 pp ± 1.8 pp, with 3/5 and 2/5 wins, i.e. no detectable difference.
+  - bursty overload on true utilisation: 48.0% vs 49.1% (Δ −1.1 pp ± 1.5 pp, 4/5 wins). This is the only metric in its favour, and it's small and inside the noise.
+  - Capacity pressure: 57% (stable) and 73% (bursty) of decisions, confirming that D21 holds beyond seed 0.
+- **Calibration:** mean chosen P_risk 0.62 vs observed load-signal overload 0.62 (stable); 0.74 vs 0.72 (bursty). It is well calibrated, and still non-discriminative (D21).
+- **Context:** least_cpu and weighted_metric are the best baselines. P2C is notably worse with 5 servers (24.8 s stable). RR and Random diverge (~850 s) because they ignore the 0.5-speed server's backlog.
+- **Status:** the primary outcome (spec §6) is **not met** at the pre-declared parameters. Phase 7 sensitivity (θ on the load signal, admission threshold, weights) will test whether any setting changes that, across all seeds, and report it either way.

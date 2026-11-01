@@ -17,6 +17,12 @@ _(Fill in after Phase 7, once the results exist.)_
 - **R_SLA is frozen up front** (18 s = 3× mean work), so the threshold can't be tuned to favour a policy.
 - **Fail fast:** config dataclasses validate themselves. A task that can't fit on the smallest server is rejected at import time.
 ### Phase 2 — Server & rolling window
+- **Reservation model:** a task runs only if its CPU and memory demands fit. Otherwise it waits in a strict FIFO local queue. Overload therefore appears as *queueing delay*, which the SLA metric captures. CPU % stays within [0,100], and the queue length is the separate signal for overload beyond that.
+- **Heterogeneity:** run time = `ceil(work / speed)` ticks. The weak node (speed 0.5) takes twice as long per task *and* fits fewer tasks (2 cores).
+- **Response time = finish − arrival**, not finish − start. Queue wait is the cost of a bad placement, so it must be counted.
+- **Two kinds of window:** CPU and memory are sampled once per tick. R̄ covers the last W *completions*. A tick-based R̄ would leave a stalled server with no data, making it look free. That is a classic "absence of evidence" bug.
+- **σ = 0 must be exact:** floating-point mean/std of ten identical values can give σ ≈ 1e-15 instead of 0, which would skip the deterministic rule and give z ≈ ±1e16. So `std()` returns exactly 0.0 when max == min.
+- **Fairness:** `build_servers()` creates fresh servers for each run. A test checks that two builds share no state.
 ### Phase 3 — Simulator + Round Robin
 ### Phase 4 — Baselines
 ### Phase 5 — Probabilistic policy

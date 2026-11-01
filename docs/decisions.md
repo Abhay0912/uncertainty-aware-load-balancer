@@ -84,3 +84,29 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
   - With R_REF set to the mean work, a typical task gets r ≈ 0.5, the midpoint of the normalised range.
   - An SLA of 3× nominal duration tolerates normal queueing but flags tasks stuck behind overload.
   - Choosing R_SLA after seeing results would let the threshold be tuned to favour one policy.
+
+## D11 — Server resource model and local queue
+- **Decision:**
+  - A task runs only while its CPU and memory demands fit into the server's free capacity (a reservation model).
+  - Tasks that don't fit wait in a **strict FIFO** local queue. Only the head can start (head-of-line blocking), so a later small task can't overtake an earlier one.
+  - CPU % = reserved cores ÷ cores; memory % = reserved GB ÷ mem_gb. Both are bounded to [0, 100].
+  - Each tick, a running task's remaining work drops by `speed`. A task started at tick t finishes at the end of the tick in which its work reaches ≤ 0, so `finish_tick = t + ceil(work / speed)`.
+  - Response time = `finish_tick − arrival_tick`. It includes any wait in the server's queue.
+- **Alternatives:**
+  - Processor sharing, where every task slows down when the server is oversubscribed and CPU can exceed 100%.
+  - A FIFO queue where any queued task that fits may start ("backfilling").
+- **Why:**
+  - The reservation model is simple and explainable. Overload shows up as **queueing delay**, which is exactly what the SLA metric measures.
+  - Strict FIFO can't starve large tasks, and it's the most neutral choice: no policy benefits from a smarter local queue.
+  - Cost: CPU % saturates at 100% instead of showing how oversubscribed a server is. Queue length is exposed separately.
+
+## D12 — Rolling-window semantics and empty windows
+- **Decision:**
+  - The CPU and memory windows hold the last W **per-tick samples**.
+  - The response-time window holds the last W **completed tasks** on that server, so R̄ uses completions, not ticks.
+  - An empty window reports mean = std = 0.0. That covers an idle server at the start of a run, and R̄ before any task has completed.
+  - `std()` returns exactly 0.0 when all values are equal (it checks max == min), so the σ = 0 rule (D6) can't be dodged by floating-point noise of about 1e-15.
+- **Alternatives:** A tick-based response window where R̄ = the mean of responses completed in the last W ticks.
+- **Why:**
+  - With a tick-based window, a congested server that completed nothing in the last 10 ticks would have no R̄ data and look *attractive*. The count-based window keeps the most recent evidence.
+  - At the start of a run, every server really is empty, so 0 is the true value, not a guess.

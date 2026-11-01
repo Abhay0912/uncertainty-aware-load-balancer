@@ -3,15 +3,16 @@
 from lbsim.policies.base import Policy, RandomizedPolicy, policy_rng
 from lbsim.policies.least_cpu import LeastCPUPolicy
 from lbsim.policies.p2c import PowerOfTwoChoicesPolicy
+from lbsim.policies.probabilistic import ProbabilisticPolicy
 from lbsim.policies.random_policy import RandomPolicy
 from lbsim.policies.round_robin import RoundRobinPolicy
 from lbsim.policies.weighted_metric import WeightedMetricPolicy
 from lbsim.policies.wrr import WeightedRoundRobinPolicy
 
 __all__ = [
-    "Policy", "RandomizedPolicy", "policy_rng", "baseline_policies",
+    "Policy", "RandomizedPolicy", "policy_rng", "baseline_policies", "all_policies",
     "RoundRobinPolicy", "WeightedRoundRobinPolicy", "RandomPolicy",
-    "LeastCPUPolicy", "WeightedMetricPolicy", "PowerOfTwoChoicesPolicy",
+    "LeastCPUPolicy", "WeightedMetricPolicy", "PowerOfTwoChoicesPolicy", "ProbabilisticPolicy",
 ]
 
 
@@ -25,3 +26,8 @@ def baseline_policies(seed: int) -> list[Policy]:
         WeightedMetricPolicy(),
         PowerOfTwoChoicesPolicy(policy_rng(seed)),
     ]
+
+
+def all_policies(seed: int) -> list[Policy]:
+    """The six baselines followed by the proposed probabilistic policy."""
+    return [*baseline_policies(seed), ProbabilisticPolicy()]

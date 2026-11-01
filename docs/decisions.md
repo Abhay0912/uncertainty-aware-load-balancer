@@ -190,3 +190,24 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
   - stable: LeastCPU 907 → 6.5 s mean response, WeightedMetric 236 → 6.4 s, P2C 588 → 26 s
   - bursty: about 36 s, but SLA violations are still 57–60% for every policy
   - RR, WRR and Random are byte-identical to before, a built-in check that only metric readers changed
+
+## D20 — P_risk comes from the window; L_i stays live
+- **Decision:**
+  - μ and σ (and therefore P_C, P_M, P_risk) come from the rolling windows of past per-tick samples (spec §3.1, step 2). L_i reads live state, as in D16.
+  - So P_risk is constant for every arrival within one tick, while L_i moves with each placement. Herding within a tick is prevented by the L term.
+  - The admission rule uses `P_risk <= threshold` to mean eligible. A server at exactly 0.5 is admitted, consistent with the strict `>` in D6.
+  - Ties in S_i go to the lowest index (`argmin_first`), and the capacity-pressure fallback considers all servers.
+  - The ablation identity is a test: with `score_weights=(1, 0)` and threshold 1.0, the policy reproduces WeightedMetric's assignments exactly.
+- **Alternatives:** Push a live sample into the statistics before scoring (μ and σ would then mix the past with this tick's placements).
+- **Why:**
+  - It is the spec's definition, and it keeps "risk from recent history" separate from "current load". That separation is what the ablation measures.
+  - Cost: the risk view lags by up to one tick, which is listed in spec §7 as a known limitation.
+
+## D21 — Observation: on the load signal, the 80% threshold makes risk non-discriminative (Phase 5, seed 0, measured, not acted on)
+- **Observation:**
+  - Load-aware balancing equalises the observed load signal. On stable, every server averages about 100% load % (running + queued, D19), so 61% of server-intervals exceed θ_C = 80%.
+  - In 62% of stable decisions (73% bursty), *every* server has P_risk > 0.5. The admission rule then falls back to all servers ("capacity pressure"), and because P_risk is close to 1 everywhere, S_i ranks almost exactly like L_i.
+  - Result: probabilistic ≈ WeightedMetric. Stable: 6.5 s / 3.7% SLA vs 6.4 s / 3.0%. Bursty: 37.6 s / 58.2% vs 36.4 s / 56.7%.
+  - The risk *estimate* is reasonably calibrated: the mean P_risk of the chosen server is 0.64, and the observed fraction of server-intervals with signal > 80 is 0.61 (stable).
+  - With `count_queued=False` (utilisation signal), pressure falls to 1–2% and the admission rule does discriminate. But the policy inherits the D18 backlog blindness (593 s mean response on stable).
+- **Status:** Reported as measured. θ_C/θ_M were fixed before results (spec §8), and changing them now would tune toward a desired outcome. θ on the load signal (e.g. 100%) and the admission threshold become Phase 7 sensitivity axes, run across all seeds and reported whatever they show.

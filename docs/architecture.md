@@ -30,7 +30,7 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
 | `workload.py` | Seeded `Task` generation for the stable and bursty patterns. |
 | `server.py` | Capacity, running tasks and local queue; computes utilisation % (running), load % (running + queued) and the observed signal (D19); owns the `MetricWindow`s. |
 | `metric_window.py` | A fixed-length rolling buffer with mean and population std. |
-| `scoring.py` | Pure formulas: `normalised_response`, `load_score` (L_i). Phase 5 adds P_C, P_M, P_risk, S_i. |
+| `scoring.py` | Pure formulas: `normalised_response`, `load_score` (L_i), `normal_cdf`, `exceedance_probability` (P_C, P_M), `combined_risk` (P_risk), `risk_adjusted_score` (S_i), `server_risk`. |
 | `policies/base.py` | The `Policy` ABC (Strategy pattern), `RandomizedPolicy` (seeded, rewindable RNG), `policy_rng`, tie-break helper. |
 | `policies/*.py` | One policy per file: RR, WRR, Random, LeastCPU, WeightedMetric, P2C, Probabilistic. |
 | `simulator.py` | The time-stepped loop, queue draining, and recording. Knows nothing about specific policies. |
@@ -47,7 +47,7 @@ class Policy(ABC):
 ```
 - Policies only **read** server state. They never modify it.
 - Randomised policies (Random, P2C) receive their own seeded `numpy.random.Generator` in `__init__`, so their randomness doesn't shift the workload's random stream.
-- `ProbabilisticPolicy` exposes the last decision's `P_risk` and the capacity-pressure flag through `decision_info()`, so the simulator logs them with the task.
+- `ProbabilisticPolicy` exposes the last decision's `p_risk`, `p_cpu`, `p_mem`, `score`, `n_eligible` and the capacity-pressure flag through `decision_info()`, so the simulator logs them with the task.
 
 ## Fairness guarantees
 1. The task list is generated once per (workload, seed) and passed unchanged to every policy.

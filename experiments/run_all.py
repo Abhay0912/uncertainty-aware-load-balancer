@@ -1,4 +1,4 @@
-"""Run policies over workloads and summarise. Phase 4: the six baselines on seed 0, one row per policy.
+"""Run policies over workloads and summarise. Phase 5: the six baselines + probabilistic on seed 0, one row per policy.
 (Full metrics, the multi-seed runner and results/ output arrive in Phase 6.)"""
 
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 import pandas as pd
 
 from lbsim.config import EXPERIMENT, SERVERS, WORKLOAD
-from lbsim.policies import baseline_policies
+from lbsim.policies import all_policies
 from lbsim.simulator import SimulationResult, simulate
 from lbsim.workload import Workload, generate_workload
 
@@ -52,6 +52,7 @@ def quick_row(res: SimulationResult) -> dict[str, float | str]:
         "max_queue": st["queue_length"].max(),
         "cpu_min_srv": per_server_cpu.min(),
         "cpu_max_srv": per_server_cpu.max(),
+        "cap_pressure": t["capacity_pressure"].mean(),
     }
 
 
@@ -60,7 +61,7 @@ def main() -> None:
     for kind in EXPERIMENT.workloads:
         wl = generate_workload(kind, seed)
         print(f"\n== {kind} | seed {seed} | {len(wl.tasks)} tasks | offered load {offered_load(wl):.3f} ==")
-        rows = [quick_row(simulate(wl.tasks, p)) for p in baseline_policies(seed)]
+        rows = [quick_row(simulate(wl.tasks, p)) for p in all_policies(seed)]
         print(pd.DataFrame(rows).set_index("policy").round(3).to_string())
 
 

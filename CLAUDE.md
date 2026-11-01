@@ -49,7 +49,7 @@ python -m experiments.run_all
 - [x] 2 Server model + rolling MetricWindow
 - [x] 3 Simulator loop + Round Robin, working end to end
 - [x] 4 Baselines: WRR, Random, LeastCPU, WeightedMetric, P2C
-- [ ] 5 Probabilistic policy + edge-case tests
+- [x] 5 Probabilistic policy + edge-case tests
 - [ ] 6 Evaluation metrics + multi-seed runner
 - [ ] 7 Plots + sensitivity analysis
 - [ ] 8 README, results write-up, interview pack

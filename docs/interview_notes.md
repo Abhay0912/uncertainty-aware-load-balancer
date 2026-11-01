@@ -49,16 +49,30 @@ _(Fill in after Phase 7, once the results exist.)_
   - Interview soundbite: "My first baselines were blind to backlog because CPU % saturates under fragmentation. I changed the *observed signal*, not the formula, and verified that the metric-blind policies' results were byte-identical."
 - **WRR's bursty weakness:** WRR is still the best on mean response, but it has 61% SLA violations under bursts, because it can't react to a spike. The load-aware policies have a lower SLA violation rate. That's the trade-off the probabilistic policy is meant to address.
 ### Phase 5 — Probabilistic policy
+- **Pipeline per decision:** window → (μ, σ) → `P = 1 − Φ((θ − μ)/σ)` for CPU and memory → `P_risk = 1 − (1−P_C)(1−P_M)` → `S = 0.6·L + 0.4·P_risk` → exclude P_risk > 0.5 unless all servers are above it → lowest S.
+- **Φ without SciPy:** `Φ(z) = ½(1 + erf(z/√2))` (D2). It is exact, and you can derive it on a whiteboard.
+- **σ = 0 edge case (D6):** a constant window is a point mass, so P is 1 if μ > θ, else 0. `MetricWindow.std()` returns exactly 0.0 for a constant window, so float noise around 1e-15 can't turn that into Φ(±huge).
+- **Variance cuts both ways:** below θ, a larger σ means *more* risk (the tail reaches θ). Above θ, a larger σ means *less* risk (some mass falls back below). There's a test for each direction.
+- **Motivating example as a test:** two servers both with mean 60%. Steady (σ = 0) gives P = 0. Fluctuating (σ = 30) gives P = 1 − Φ(0.67) ≈ 0.25. A least-loaded policy can't tell them apart.
+- **Window vs. live (D20):** risk comes from past samples and is constant within a tick. L comes from live state and moves with each placement, so herding is prevented by L.
+- **Ablation identity:** with weights (1, 0) and threshold 1.0, the probabilistic policy reproduces WeightedMetric's assignments exactly (a test). So any experimental difference comes *only* from P_risk.
+- **Seed-0 result (mean response / SLA violation rate):** stable: prob 6.5 s / 3.7% vs WM 6.4 s / 3.0%. Bursty: prob 37.6 s / 58.2% vs WM 36.4 s / 56.7%. **No improvement on seed 0.** It is reported as measured.
+- **Why (D21):** a good balancer *equalises* load, so every server hovers around the same level (about 100% load % here, above θ = 80%). Then P_risk is close to 1 everywhere, the admission rule falls back ("capacity pressure" in 62–73% of decisions), and S ranks like L. Risk only adds information when servers *differ* in variability, and a load-aware balancer erodes exactly that difference.
+- **But the estimate is calibrated:** mean chosen P_risk is 0.64 vs. an observed exceedance frequency of 0.61. The model predicts well; it just can't *discriminate* between servers.
+- **Interview soundbite:** "The risk model was calibrated but non-discriminative: its threshold sat below the operating point the balancer itself drives every server to. I didn't retune θ after seeing results. It became a pre-declared sensitivity axis."
 ### Phase 6 — Metrics & experiments
 ### Phase 7 — Plots & sensitivity
 ### Phase 8 — Wrap-up
 
 ## Question bank (answer each as its phase completes)
 1. Why isn't Least Loaded enough? What does variance add?
+   *(Phase 5)* Same mean, different σ means a different tail probability of crossing θ (60% steady → P=0; 60% ± 30 → P≈0.25). In practice here, a load-aware balancer equalises servers, so the extra information shrinks (D21). Variance helps most when servers differ in volatility and the threshold sits near the operating point.
 2. Utilisation is bounded to [0,100], and W=10. Is the normal assumption valid? What would you use instead?
 3. Why `1 − (1−P_C)(1−P_M)`? What breaks if CPU and memory are correlated?
+   *(Phase 5)* It is P(at least one exceeds) = 1 − P(neither), and it needs independence to factor. With positive correlation the true union probability is *lower* (the events overlap), so the formula overestimates risk. The bounds are max(P_C, P_M) ≤ P_union ≤ min(1, P_C + P_M). Our demands are drawn independently (D8), but queued load couples CPU and memory, since both grow with the backlog.
 4. How did you make sure the comparison between policies was fair?
 5. Why is the risk-free weighted-metric baseline the most important one?
+   *(Phase 5)* It is the proposed method minus exactly one term. A test proves that setting the risk weight to 0 and disabling admission reproduces it bit for bit. Beating RR only shows that load-awareness helps; beating WM is the only evidence that *uncertainty* helps.
 6. Why does Power of Two Choices work so well for how little it does?
    *(Phase 4)* With n balls into n bins, the maximum load drops from Θ(log n / log log n) to Θ(log log n) with just two random probes (Mitzenmacher). It is cheap (O(1) probes) and robust to stale data, because it doesn't herd. Caveat seen here: with only 5 servers and a metric that hides backlog, its two samples often include the hidden-backlog node, so its advantage over Random is real but limited.
 7. Why drain the queue at the end? What bias does a hard cutoff introduce?

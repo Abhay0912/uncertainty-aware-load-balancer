@@ -230,3 +230,24 @@ def test_randomised_policy_seed_changes_assignments(bursty0):
     a = simulate(bursty0.tasks, RandomPolicy(policy_rng(0))).tasks["server_id"]
     b = simulate(bursty0.tasks, RandomPolicy(policy_rng(1))).tasks["server_id"]
     assert not a.equals(b)
+
+
+def test_least_cpu_sees_hidden_backlog():
+    # server 1 (2 cores): one 1.2-core task running (60%) + one 1.0-core task queued -> load 110%
+    servers = loaded_servers([[(3.0, 1.0)], [(1.2, 0.5), (1.0, 0.5)]], specs=SMALL)
+    assert servers[1].queue_length == 1 and servers[1].cpu_pct == pytest.approx(60.0)
+    assert LeastCPUPolicy().select(servers, make_task(9)) == 0
+    blind = build_servers(SMALL, count_queued=False)
+    for sid, (cpu, mem) in [(0, (3.0, 1.0)), (1, (1.2, 0.5)), (1, (1.0, 0.5))]:
+        blind[sid].assign(make_task(50 + sid, cpu, mem), tick=0)
+    assert LeastCPUPolicy().select(blind, make_task(9)) == 1
+
+
+def test_simulate_logs_load_and_respects_flag(bursty0):
+    from dataclasses import replace
+    on = simulate(bursty0.tasks, LeastCPUPolicy())
+    off = simulate(bursty0.tasks, LeastCPUPolicy(), scoring=replace(SCORING, count_queued=False))
+    st = on.server_ticks
+    assert (st["cpu_load_pct"] >= st["cpu_pct"] - 1e-9).all()
+    assert (st.loc[st.queue_length == 0, "cpu_load_pct"] - st.loc[st.queue_length == 0, "cpu_pct"]).abs().max() < 1e-9
+    assert not on.tasks["server_id"].equals(off.tasks["server_id"])

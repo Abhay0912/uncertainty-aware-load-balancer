@@ -31,11 +31,24 @@ class TaskRun:
 
 
 class Server:
-    def __init__(self, server_id: int, spec: ServerSpec, window: int = SCORING.window) -> None:
+    """cpu_pct/mem_pct: true utilisation, bounded to [0, 100], used for evaluation.
+    cpu_load_pct/mem_load_pct: running + queued demand (can exceed 100).
+    cpu_signal/mem_signal: what the balancer observes and the windows record (D19)."""
+
+    def __init__(
+        self,
+        server_id: int,
+        spec: ServerSpec,
+        window: int = SCORING.window,
+        count_queued: bool = SCORING.count_queued,
+    ) -> None:
         self.id = server_id
         self.spec = spec
+        self.count_queued = count_queued
         self._running: list[TaskRun] = []
         self._queue: deque[TaskRun] = deque()
+        self._queued_cpu = 0.0
+        self._queued_mem = 0.0
         self.cpu_window = MetricWindow(window)
         self.mem_window = MetricWindow(window)
         self.resp_window = MetricWindow(window)
@@ -56,6 +69,22 @@ class Server:
     @property
     def mem_pct(self) -> float:
         return 100.0 * self.mem_used / self.spec.mem_gb
+
+    @property
+    def cpu_load_pct(self) -> float:
+        return 100.0 * (self.cpu_used + self._queued_cpu) / self.spec.cores
+
+    @property
+    def mem_load_pct(self) -> float:
+        return 100.0 * (self.mem_used + self._queued_mem) / self.spec.mem_gb
+
+    @property
+    def cpu_signal(self) -> float:
+        return self.cpu_load_pct if self.count_queued else self.cpu_pct
+
+    @property
+    def mem_signal(self) -> float:
+        return self.mem_load_pct if self.count_queued else self.mem_pct
 
     @property
     def mean_response_time(self) -> float:
@@ -85,6 +114,8 @@ class Server:
             raise ValueError(f"task {task.id} can never fit on server {self.id}")
         run = TaskRun(task=task, server_id=self.id, assigned_tick=tick, remaining=task.work)
         self._queue.append(run)
+        self._queued_cpu += task.cpu_demand
+        self._queued_mem += task.mem_demand
         self._start_queued(tick)
         return run
 
@@ -107,9 +138,9 @@ class Server:
         return finished
 
     def sample(self) -> None:
-        """Record the current CPU and memory utilisation as one observation."""
-        self.cpu_window.push(self.cpu_pct)
-        self.mem_window.push(self.mem_pct)
+        """Record the observed CPU and memory signal as one observation."""
+        self.cpu_window.push(self.cpu_signal)
+        self.mem_window.push(self.mem_signal)
 
     def _fits_now(self, task: Task) -> bool:
         return (
@@ -123,10 +154,16 @@ class Server:
             run = self._queue.popleft()
             run.start_tick = tick
             self._running.append(run)
+            self._queued_cpu -= run.task.cpu_demand
+            self._queued_mem -= run.task.mem_demand
+        if not self._queue:
+            self._queued_cpu = self._queued_mem = 0.0  # clear float drift from repeated +/-
 
 
 def build_servers(
-    specs: tuple[ServerSpec, ...] = SERVERS, window: int = SCORING.window
+    specs: tuple[ServerSpec, ...] = SERVERS,
+    window: int = SCORING.window,
+    count_queued: bool = SCORING.count_queued,
 ) -> list[Server]:
     """Fresh, independent servers for one run."""
-    return [Server(i, spec, window) for i, spec in enumerate(specs)]
+    return [Server(i, spec, window, count_queued) for i, spec in enumerate(specs)]

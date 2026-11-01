@@ -24,6 +24,9 @@ task assignment compared with simple load-balancing policies?**
 ## 3. Formulas
 
 ### 3.1 Metrics & rolling statistics (§3.2)
+> **Implementation note (D19):** the balancer's observed `C_i`, `M_i` are *load* % = (running + queued demand) ÷ capacity,
+> which can exceed 100. True utilisation (≤ 100) is still logged and used for the evaluation metrics.
+> `ScoringConfig.count_queued=False` restores pure utilisation.
 - Metric vector for server i at time t: `x_i(t) = [C_i(t), M_i(t), R_i(t)]` = CPU %, memory %, response time.
 - Rolling window: the latest **W = 10** observations (configurable, not tuned).
 - Mean: `μ_C = (1/W) Σ C_i(t)`
@@ -104,7 +107,7 @@ All policies must get **the same task sequence, server capacities, and workload 
 under **bursty** demand without an unacceptable loss of throughput or increase in response time?
 
 ## 7. Known assumptions & limitations
-- Normal approximation for bounded [0,100] utilisation, with a small window (W=10). This is least accurate during abrupt changes.
+- Normal approximation for a non-negative load signal (bounded [0,100] when `count_queued=False`), with a small window (W=10). This is least accurate during abrupt changes.
 - The independence assumption when combining P_C and P_M (real metrics are often correlated).
 - Risk is computed from *past* observations, not from the predicted state after the assignment.
 - Weights and thresholds are hand-picked.

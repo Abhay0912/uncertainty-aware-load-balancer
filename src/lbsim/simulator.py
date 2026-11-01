@@ -2,7 +2,7 @@
 
 Each tick t:
   1. dispatch: every task arriving at t is assigned via policy.select (tasks start at t if they fit)
-  2. sample:   each server records the CPU/memory busy *during* tick t, and a per-tick row is logged
+  2. sample:   each server records its observed CPU/memory signal (D19), and a per-tick row is logged
   3. step:     running tasks progress; finished ones free capacity and queued ones start at t + 1
 Arrivals end when the task list is exhausted; the loop then drains until every server is idle,
 or stops at max_ticks with the unfinished tasks flagged (completed = False).
@@ -15,17 +15,21 @@ from typing import Any, Sequence
 
 import pandas as pd
 
-from lbsim.config import SCORING, SERVERS, SIMULATION, ServerSpec, SimulationConfig
+from lbsim.config import SCORING, SERVERS, SIMULATION, ScoringConfig, ServerSpec, SimulationConfig
 from lbsim.policies.base import Policy
 from lbsim.server import Server, TaskRun, build_servers
 from lbsim.workload import Task
 
 TASK_COLUMNS = [
     "task_id", "arrival_tick", "server_id", "cpu_demand", "mem_demand", "work",
-    "server_cpu_pct", "server_mem_pct", "start_tick", "finish_tick", "response_time",
+    "server_cpu_pct", "server_mem_pct", "server_cpu_load_pct", "server_mem_load_pct",
+    "start_tick", "finish_tick", "response_time",
     "completed", "capacity_pressure",
 ]
-TICK_COLUMNS = ["tick", "server_id", "cpu_pct", "mem_pct", "n_running", "queue_length", "completed"]
+TICK_COLUMNS = [
+    "tick", "server_id", "cpu_pct", "mem_pct", "cpu_load_pct", "mem_load_pct",
+    "n_running", "queue_length", "completed",
+]
 
 
 @dataclass(frozen=True, eq=False)
@@ -41,16 +45,17 @@ def simulate(
     tasks: Sequence[Task],
     policy: Policy,
     specs: tuple[ServerSpec, ...] = SERVERS,
-    window: int = SCORING.window,
+    scoring: ScoringConfig = SCORING,
     sim: SimulationConfig = SIMULATION,
 ) -> SimulationResult:
-    """Run one policy over one task stream on freshly built servers."""
+    """Run one policy over one task stream on freshly built servers.
+    `scoring` sets what servers record (window size, D19 signal); give the policy the same config."""
     if any(a.arrival_tick > b.arrival_tick for a, b in zip(tasks, tasks[1:])):
         raise ValueError("tasks must be sorted by arrival_tick")
     if tasks and tasks[-1].arrival_tick >= sim.max_ticks:
         raise ValueError("max_ticks must exceed the last arrival so every task is dispatched")
 
-    servers = build_servers(specs, window)
+    servers = build_servers(specs, scoring.window, scoring.count_queued)
     policy.reset()
     runs: list[TaskRun] = []
     decisions: list[dict[str, Any]] = []
@@ -70,6 +75,8 @@ def simulate(
             decisions.append({
                 "server_cpu_pct": target.cpu_pct,
                 "server_mem_pct": target.mem_pct,
+                "server_cpu_load_pct": target.cpu_load_pct,
+                "server_mem_load_pct": target.mem_load_pct,
                 "capacity_pressure": False,
                 **policy.decision_info(),
             })
@@ -79,7 +86,8 @@ def simulate(
         for s in servers:
             s.sample()
             tick_rows.append(
-                (tick, s.id, s.cpu_pct, s.mem_pct, s.n_running, s.queue_length, s.completed)
+                (tick, s.id, s.cpu_pct, s.mem_pct, s.cpu_load_pct, s.mem_load_pct,
+                 s.n_running, s.queue_length, s.completed)
             )
         for s in servers:
             s.step(tick)

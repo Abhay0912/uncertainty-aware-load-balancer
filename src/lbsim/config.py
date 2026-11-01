@@ -78,6 +78,7 @@ class ScoringConfig:
     score_weights: tuple[float, float] = (0.6, 0.4)
     risk_admission_threshold: float = 0.5
     r_ref: float = 6.0
+    count_queued: bool = True  # observed C/M include queued demand (D19); False = pure utilisation
 
     def __post_init__(self) -> None:
         if self.window < 1:

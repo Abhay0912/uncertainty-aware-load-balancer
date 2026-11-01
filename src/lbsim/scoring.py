@@ -29,5 +29,5 @@ def load_score(
 
 
 def server_load_score(server: Server, cfg: ScoringConfig = SCORING) -> float:
-    """L_i from live CPU/memory % and the windowed mean response time (decision D16)."""
-    return load_score(server.cpu_pct, server.mem_pct, server.mean_response_time, cfg)
+    """L_i from the live observed CPU/memory signal (D16, D19) and the windowed mean response time."""
+    return load_score(server.cpu_signal, server.mem_signal, server.mean_response_time, cfg)

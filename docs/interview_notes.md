@@ -42,6 +42,11 @@ _(Fill in after Phase 7, once the results exist.)_
   - stable: WRR 9 s / 9% · WM 236 s / 14% · P2C 588 s / 22% · LeastCPU 907 s / 24% · RR 899 s / 60% · Random 870 s / 59%
   - bursty: WRR 39 s / 61% · WM 489 s / 34% · P2C 880 s / 40% · LeastCPU 1773 s / 37%
 - **Key finding (D18): utilisation % hides backlog.** The 2-core server has a 424-task queue yet shows only about 62% CPU, because the head-of-line task can't fit next to the running one. Load-aware policies keep feeding it. That's why capacity-aware but load-blind WRR wins here. Interview angle: this is why real systems also look at **queue length / load average** (Linux load average counts *waiting* tasks, not just running ones), not only CPU %.
+- **Fix (D19): the balancer observes *load* %, i.e. (running + queued demand) ÷ capacity.** Utilisation is still logged for evaluation. Load equals utilisation when there is no queue, so nothing changes until a backlog exists. The flag `count_queued=False` reproduces the old run.
+  - stable: LeastCPU 907 → 6.5 s, WeightedMetric 236 → 6.4 s (3% SLA), P2C 588 → 26 s. WRR 9 s is unchanged.
+  - bursty: the load-aware policies are about 36 s, but **every policy has 57–61% SLA violations**. During bursts the offered load is about 160% of capacity, so no placement rule can avoid queueing. Phase 5 has to be judged on *how much* it reduces that, and on overload frequency, not on eliminating it.
+  - P2C now trails WeightedMetric. With N = 5, a two-server sample misses the fastest server (16 of 37 capacity units) 60% of the time. P2C's strengths, large N and stale information, don't apply here.
+  - Interview soundbite: "My first baselines were blind to backlog because CPU % saturates under fragmentation. I changed the *observed signal*, not the formula, and verified that the metric-blind policies' results were byte-identical."
 - **WRR's bursty weakness:** WRR is still the best on mean response, but it has 61% SLA violations under bursts, because it can't react to a spike. The load-aware policies have a lower SLA violation rate. That's the trade-off the probabilistic policy is meant to address.
 ### Phase 5 — Probabilistic policy
 ### Phase 6 — Metrics & experiments

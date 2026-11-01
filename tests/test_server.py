@@ -92,10 +92,11 @@ def test_capacity_never_exceeded_and_everything_drains():
         runs.append(s.assign(task, tick))
         assert 0.0 <= s.cpu_pct <= 100.0 + 1e-9
         assert 0.0 <= s.mem_pct <= 100.0 + 1e-9
+        assert s.cpu_load_pct >= s.cpu_pct - 1e-9
     finished += run_until_idle(s, start_tick=tick)
     assert len(finished) == len(tasks) == s.completed
     assert all(r.finish_tick is not None for r in runs)
-    assert max(s.cpu_window.values()) <= 100.0 + 1e-9
+    assert max(s.cpu_window.values()) > 100.0, "D19: the window records load, which exposes the backlog"
 
 
 def test_response_window_keeps_last_w_completions():
@@ -133,3 +134,48 @@ def test_build_servers_fresh_and_independent():
     a[0].assign(make_task(), tick=0)
     a[0].sample()
     assert b[0].is_idle() and len(b[0].cpu_window) == 0
+
+
+# --- D19: observed load signal includes queued demand ---------------------------
+
+def test_load_pct_counts_queued_demand_utilisation_does_not():
+    s = Server(0, ServerSpec(cores=2, mem_gb=4, speed=1.0))
+    s.assign(make_task(0, cpu=1.5, mem=1.0, work=5.0), tick=0)
+    s.assign(make_task(1, cpu=1.0, mem=2.0, work=5.0), tick=0)
+    s.assign(make_task(2, cpu=1.0, mem=2.0, work=5.0), tick=0)
+    assert s.queue_length == 2
+    assert s.cpu_pct == pytest.approx(75.0)
+    assert s.mem_pct == pytest.approx(25.0)
+    assert s.cpu_load_pct == pytest.approx(175.0)
+    assert s.mem_load_pct == pytest.approx(125.0)
+
+
+def test_load_equals_utilisation_without_queue():
+    s = Server(0, ServerSpec(cores=4, mem_gb=8, speed=1.0))
+    s.assign(make_task(0, cpu=1.3, mem=2.2, work=3.0), tick=0)
+    assert s.queue_length == 0
+    assert s.cpu_load_pct == s.cpu_pct and s.mem_load_pct == s.mem_pct
+
+
+def test_queued_totals_return_to_exact_zero():
+    s = Server(0, ServerSpec(cores=2, mem_gb=4, speed=1.0))
+    for i in range(50):
+        s.assign(make_task(i, cpu=0.7 + 0.01 * i, mem=0.3, work=1.7), tick=0)
+    run_until_idle(s)
+    assert s.cpu_load_pct == 0.0 and s.mem_load_pct == 0.0
+
+
+@pytest.mark.parametrize("count_queued", [True, False])
+def test_signal_and_window_follow_flag(count_queued):
+    s = Server(0, ServerSpec(cores=2, mem_gb=4, speed=1.0), count_queued=count_queued)
+    s.assign(make_task(0, cpu=1.5, work=5.0), tick=0)
+    s.assign(make_task(1, cpu=1.0, work=5.0), tick=0)
+    s.sample()
+    expected = 125.0 if count_queued else 75.0
+    assert s.cpu_signal == pytest.approx(expected)
+    assert s.cpu_window.latest() == pytest.approx(expected)
+
+
+def test_build_servers_passes_flag():
+    assert not any(s.count_queued for s in build_servers(count_queued=False))
+    assert all(s.count_queued for s in build_servers()) == SCORING.count_queued

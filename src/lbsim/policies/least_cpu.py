@@ -1,4 +1,4 @@
-"""Least CPU: the server with the lowest current CPU %."""
+"""Least CPU: the server with the lowest current observed CPU % (running + queued demand, D19)."""
 
 from __future__ import annotations
 
@@ -15,4 +15,4 @@ class LeastCPUPolicy(Policy):
     name = "least_cpu"
 
     def select(self, servers: Sequence[Server], task: Task) -> int:
-        return argmin_first([s.cpu_pct for s in servers])
+        return argmin_first([s.cpu_signal for s in servers])

@@ -28,7 +28,7 @@ WorkloadGenerator(seed, "stable"|"bursty")                              │
 |---|---|
 | `config.py` | Every tunable constant (see `docs/spec.md` §8). No logic. |
 | `workload.py` | Seeded `Task` generation for the stable and bursty patterns. |
-| `server.py` | Capacity, running tasks and local queue; computes the current CPU %, memory % and response time; owns a `MetricWindow`. |
+| `server.py` | Capacity, running tasks and local queue; computes utilisation % (running), load % (running + queued) and the observed signal (D19); owns the `MetricWindow`s. |
 | `metric_window.py` | A fixed-length rolling buffer with mean and population std. |
 | `scoring.py` | Pure formulas: `normalised_response`, `load_score` (L_i). Phase 5 adds P_C, P_M, P_risk, S_i. |
 | `policies/base.py` | The `Policy` ABC (Strategy pattern), `RandomizedPolicy` (seeded, rewindable RNG), `policy_rng`, tie-break helper. |

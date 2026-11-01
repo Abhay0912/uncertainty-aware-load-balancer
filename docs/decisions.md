@@ -164,4 +164,29 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
   - Every policy that reads `C_i`/`M_i` therefore sees the most backlogged server as "moderately loaded". LeastCPU sends it 22% of the tasks; its capacity share is 2.7%.
   - R̄ catches up only slowly, because it comes from completions (D12). WeightedMetric does better (12% share), but is still far off.
 - **Effect:** On stable seed 0, WRR (capacity-aware but load-blind) beats every load-aware baseline by a wide margin: 9 s mean response vs. 236–907 s.
-- **Status:** Open. The baselines implement the spec exactly. Whether the server metric should include queued demand is a server-model question (D11). It is to be decided before Phase 5, because the probabilistic policy reads the same metrics.
+- **Status:** Resolved by D19. The baselines implement the spec exactly. Whether the server metric should include queued demand is a server-model question (D11). It is to be decided before Phase 5, because the probabilistic policy reads the same metrics.
+
+## D19 — The observed load signal includes queued demand
+- **Decision:**
+  - Each server exposes three CPU/memory views:
+    - `cpu_pct`/`mem_pct`: true utilisation of running tasks, bounded [0, 100]
+    - `cpu_load_pct`/`mem_load_pct`: (running + queued demand) ÷ capacity, which can exceed 100
+    - `cpu_signal`/`mem_signal`: what the balancer observes, which is load % when `ScoringConfig.count_queued` (default True), otherwise utilisation
+  - The rolling windows sample the *signal*, so μ, σ (and later P_risk) see backlog too.
+  - All policies read the signal (LeastCPU, and `L_i` via `scoring.server_load_score`).
+  - Evaluation (avg utilisation, delivered core-seconds) keeps using true utilisation. Both views are logged per tick and per decision.
+  - `simulate()` now takes the whole `ScoringConfig` instead of a bare `window`, so window size and signal choice always travel together.
+  - Queued totals are kept incrementally and reset to exactly 0.0 when the queue empties, which removes float drift.
+- **Alternatives:**
+  - (A) Keep pure utilisation and report D18 as a limitation.
+  - Add queue length as an extra term in `L_i`, which would change the spec's formula and weights.
+  - Make queued servers ineligible, a new mechanism that would have to apply to every policy.
+- **Why:**
+  - It fixes D18 without touching any spec formula or weight. Load % equals utilisation exactly whenever there is no queue, so it only differs when a backlog exists.
+  - It is the same idea as the Linux load average, which counts runnable *waiting* tasks, not just running ones.
+  - With θ_C = 80%, a backlogged server (load ≫ 100%) now gets P_C → 1 in Phase 5, which is the behaviour the risk model is meant to have.
+- **Cost:** The spec assumes bounded [0,100] utilisation for the normal approximation. The load signal is unbounded above, which arguably fits a normal model *better* (no ceiling at 100), but it is a deliberate deviation, noted in spec.md §3.1.
+- **Effect (seed 0):**
+  - stable: LeastCPU 907 → 6.5 s mean response, WeightedMetric 236 → 6.4 s, P2C 588 → 26 s
+  - bursty: about 36 s, but SLA violations are still 57–60% for every policy
+  - RR, WRR and Random are byte-identical to before, a built-in check that only metric readers changed

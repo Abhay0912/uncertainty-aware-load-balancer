@@ -10,6 +10,12 @@ _(Fill in after Phase 7, once the results exist.)_
 - Strategy pattern + one shared task stream → a fair, matched comparison.
 
 ### Phase 1 — Config & workload
+- **Workloads differ only in variability.** Bursty is scaled so its mean offered load equals stable's (≈65%). About 41% utilisation between bursts and about 160% during them. Without this, "bursty is worse" could just mean "bursty has more load".
+- **Calibrating by offered load:** each task consumes `cpu × work` core-seconds at speed 1, and the cluster supplies `Σ cores·speed` per second. That gives λ₀ ≈ 4 tasks/s.
+- **Reproducibility:** one `SeedSequence(seed)` is split into independent child streams (bursts, arrivals, CPU, mem, work). The global `np.random` is never used, and a test proves it.
+- **Fairness:** the workload is generated once per (kind, seed) as an immutable tuple of frozen `Task`s, and every policy receives the same object.
+- **R_SLA is frozen up front** (18 s = 3× mean work), so the threshold can't be tuned to favour a policy.
+- **Fail fast:** config dataclasses validate themselves. A task that can't fit on the smallest server is rejected at import time.
 ### Phase 2 — Server & rolling window
 ### Phase 3 — Simulator + Round Robin
 ### Phase 4 — Baselines

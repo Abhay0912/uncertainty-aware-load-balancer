@@ -43,7 +43,7 @@ python -m experiments.run_all
 
 ## Roadmap
 - [x] 0 Foundation: spec, docs, skeleton
-- [ ] 1 Config + workload generator (stable/bursty, seeded)
+- [x] 1 Config + workload generator (stable/bursty, seeded)
 - [ ] 2 Server model + rolling MetricWindow
 - [ ] 3 Simulator loop + Round Robin, working end to end
 - [ ] 4 Baselines: WRR, Random, LeastCPU, WeightedMetric, P2C

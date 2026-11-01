@@ -120,8 +120,11 @@ under **bursty** demand without an unacceptable loss of throughput or increase i
 | L weights (cpu, mem, resp) | 0.4, 0.4, 0.2 | §3.4 |
 | S weights (load, risk) | 0.6, 0.4 | §3.4 |
 | RISK_ADMISSION_THRESHOLD | 0.5 | §3.4 |
-| R_REF | TBD (Phase 1) | §3.4 (must be > 0) |
-| R_SLA | TBD (Phase 1, fixed before comparing) | §5.3 |
-| Server capacities / WRR weights | TBD (Phase 1, fixed before the experiment) | §3.5 |
-| Tick length, sim duration, arrival rates, burst shape | TBD (Phase 1) | §3.6 |
-| Seeds | TBD (e.g. 5 seeds) | §3.6 |
+| R_REF | 6.0 s (= mean task work) | §3.4 (must be > 0); D10 |
+| R_SLA | 18.0 s (= 3 × mean work), frozen | §5.3; D10 |
+| Servers (cores, GB, speed) | (4,8,1.0) (4,8,1.0) (8,16,1.5) (8,16,2.0) (2,4,0.5); WRR weight = cores × speed | §3.5; D8 |
+| Tick, horizon | 1 tick = 1 s; arrivals for 1000 ticks, then drain | §3.6 |
+| Tasks | CPU ~U(0.5,1.5) cores, mem ~U(0.5,3) GB, work ~lognormal(mean 6 s, σ=0.6), ≥1 s | §3.6; D8 |
+| Arrivals | Poisson per tick, λ₀ ≈ 4.0/s → 65% mean utilisation, ±20% sinusoidal drift (period 500) | §3.6; D9 |
+| Bursts | 4 × 50 ticks, ×3 arrivals, ×1.3 CPU; bursty baseline scaled so mean load = stable | §3.6; D9 |
+| Seeds | 0–4 | §3.6 |

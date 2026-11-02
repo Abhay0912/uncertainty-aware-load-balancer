@@ -4,7 +4,7 @@ Cloud Computing M.Tech project (NIT Warangal): **uncertainty-aware probabilistic
 Python simulation against 6 baselines under stable and bursty workloads.
 
 - **Source of truth: `docs/spec.md`.** Do NOT re-read `Cloud_Computing_PR.pdf` (expensive). Read the spec instead.
-- Design: `docs/architecture.md` · Decisions: `docs/decisions.md` · Interview prep: `docs/interview_notes.md`
+- Design: `docs/architecture.md` · Decisions: `docs/decisions.md` · Results: `docs/results.md` (figures in `docs/figures/`) · Interview prep: `docs/interview_notes.md`
 
 ## Commands (PowerShell, from repo root)
 ```
@@ -55,4 +55,4 @@ python -m experiments.plots         # -> results/figures/
 - [x] 5 Probabilistic policy + edge-case tests
 - [x] 6 Evaluation metrics + multi-seed runner
 - [x] 7 Plots + sensitivity analysis
-- [ ] 8 README, results write-up, interview pack
+- [x] 8 README, results write-up, interview pack

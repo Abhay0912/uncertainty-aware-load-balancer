@@ -1,7 +1,27 @@
 # Interview Notes
 
 ## 2-minute pitch
-_(Fill in after Phase 7, once the results exist.)_
+1. **Problem (15 s).** Most load balancers look at a server's *current* CPU. Two servers at 60% look identical,
+   even if one is steady and the other swings between 30% and 90%. I asked whether the *variability* of recent
+   metrics could predict overload and improve placement.
+2. **Method (30 s).** For each server I take the rolling mean and standard deviation of CPU and memory over the
+   last 10 samples. I turn them into a threshold-exceedance probability with a normal CDF and combine CPU and
+   memory into one P_risk. The score is 0.6 × current load + 0.4 × P_risk, and servers with P_risk above 0.5 are
+   filtered out unless every server is risky.
+3. **Evaluation (30 s).** I built a discrete-time simulator with 5 heterogeneous servers and stable and bursty
+   workloads at the same mean load. It compares 7 policies over 5 seeds. Every policy gets the identical task
+   list. The key baseline is the exact same policy *without* the risk term. A test proves the two match decision
+   for decision, so any difference comes from uncertainty alone. All parameters were frozen before I looked at
+   results.
+4. **Findings (30 s).** Load-awareness is huge: Round Robin is about 850 s mean response against about 6 s,
+   because it overloads a slow server. I also found that CPU % hides queued backlog, and fixed that by observing
+   load including the queue. But the risk term did **not** beat its ablation. It was slightly worse on stable
+   (0/5 seeds) and within noise on bursty.
+5. **Insight (15 s).** The risk estimate was well calibrated, 0.74 predicted vs 0.72 observed, but not
+   *discriminative*. A good balancer makes all servers look alike, and bursts push them all far above the
+   threshold together. A sensitivity sweep over θ, the admission threshold, the weights and the window confirmed
+   the null result is robust. Variance should help when servers differ in volatility, and that's the next
+   experiment.
 
 ## Phase notes
 ### Phase 0 — Foundation
@@ -93,6 +113,43 @@ _(Fill in after Phase 7, once the results exist.)_
   - legends kept off the data
 - **Interview soundbite:** "I pre-declared the sensitivity axes, reran the ablation at every point, and kept the evaluation thresholds fixed. The null result held everywhere. The time series shows the mechanism: bursts saturate every server at once, so a per-server risk score has nothing to rank."
 ### Phase 8 — Wrap-up
+- **Deliverables:**
+  - `README.md` leads with the finding, a results table and three figures.
+  - `docs/results.md` covers the setup, the ablation, the explanation, the sensitivity sweep, threats to
+    validity and future work.
+- **Curated vs generated outputs (D28):** `results/` is a disposable build output and stays gitignored. The six
+  figures the write-up cites are copied to `docs/figures/` and committed, so the README renders on GitHub
+  without rerunning a 200 s sweep. This is the same principle as not committing build artefacts while still
+  versioning the release notes.
+- **How to frame a negative result:**
+  - Lead with what the experiment *can* show: a fair, pre-registered comparison against a one-term ablation.
+  - Then the finding: no improvement, robust across the sweep.
+  - Then the mechanism: calibrated but non-discriminative.
+  - Then the regime where the idea should work.
+  - A null result with a mechanism behind it is a finding. A null result without one is a failed project.
+- **Interview soundbite:** "My hypothesis was falsified by my own ablation, and I can show exactly why. The
+  balancer erases the variance differences that the risk model needs."
+
+## Tough questions (with answers)
+- **"Your method didn't work. Why should I care?"** Because the experiment was built to *tell* whether it worked.
+  I froze parameters before the results, compared against the exact ablation, and paired by seed. Most
+  "X% improvement" claims skip all three. I also learned something transferable: calibration is not the same as
+  usefulness. A forecast can be right on average and still useless for ranking.
+- **"Didn't you just pick bad parameters?"** I pre-declared four sensitivity axes plus an interaction grid and
+  reran the ablation at every point. Nothing consistently helps. The settings that come closest are the ones
+  that *switch off* the risk machinery.
+- **"Is 5 seeds enough?"** For a 0/5 or 5/5 pattern, yes: a sign test gives p ≈ 0.03. For effects around 1% on
+  bursty, no. I report win counts and std rather than claiming significance I don't have.
+- **"Why simulate instead of using a real cluster?"** To control the workload exactly, give every policy the
+  identical task stream, and run 70 + 440 configurations in minutes. A real cluster can't replay the same
+  arrivals 7 times. The trade-off is external validity, which I list as a limitation.
+- **"What was the hardest bug?"** Utilisation % hiding the backlog (D18). The 2-core server had a 424-task queue
+  but showed 62% CPU, because the next task couldn't fit. Every load-aware policy kept feeding it. The fix was
+  to change the observed signal to include queued demand, and to verify that the load-blind policies' results
+  were byte-identical afterwards.
+- **"How is this different from Least Connections?"** Least Connections ranks by the *current* count. This policy
+  adds a forecast of *crossing a threshold*, which also depends on recent volatility. In this setup the forecast
+  added nothing because volatility was uniform across servers.
 
 ## Question bank (answer each as its phase completes)
 1. Why isn't Least Loaded enough? What does variance add?
@@ -112,4 +169,29 @@ _(Fill in after Phase 7, once the results exist.)_
 8. Lower load imbalance isn't automatically better. Why?
    *(Phase 6)* The servers are heterogeneous (speeds 0.5–2.0). Equal utilisation % on a 0.5-speed node means its tasks take 4× longer than on the fastest one. Imbalance is measured on utilisation %, which ignores speed and queues. In the data, least_cpu has the lowest imbalance (12.1) but weighted_metric has equal or better response. RR's imbalance (22.6) is a *symptom* of the one hidden-backlog node, not the cause. So it's a context metric, not a target.
 9. How would this run on a real cloud? (Metrics source: Prometheus or CloudWatch; LB: Envoy, NGINX or a K8s scheduler plugin.)
+   *(Phase 8)*
+   - **Metrics:** node exporters push CPU, memory and queue depth into Prometheus (or CloudWatch). A rolling
+     μ/σ is just `avg_over_time` and `stddev_over_time` over a window.
+   - **Placement:** for request-level balancing, a sidecar computes P_risk per backend and publishes it as a
+     weight. That could be Envoy's load-report / ORCA mechanism, or NGINX upstream weights. For task or pod
+     placement, it would be a Kubernetes scheduler *score plugin*, where S_i maps directly onto the
+     filter/score phases. The admission rule is the filter, and S_i is the score.
+   - **Changes from the simulation:** metrics are stale (15–60 s scrapes), so variance also captures
+     *uncertainty about now*. Many balancer replicas decide concurrently, so herding returns, which is why P2C
+     exists. The risk has to be cheap, O(1) per backend per decision, which this is.
 10. Limitations, and what you'd do next. (Real traces, a correlated risk model, tuning the weights, prediction after assignment.)
+    *(Phase 8)*
+    - **Limitations:**
+      - synthetic, independent demands
+      - normality on a skewed, autocorrelated signal with W = 10
+      - CPU and memory assumed independent
+      - risk computed from the past rather than after assignment
+      - 5 servers and 5 seeds
+      - hand-set weights
+    - **Next:**
+      - (a) servers with *different* volatility, e.g. noisy neighbours, the regime where the hypothesis predicts
+        a gain
+      - (b) post-assignment risk: add the task's demand before computing P
+      - (c) stale or sampled metrics
+      - (d) an empirical or EWMA risk model, with joint CPU and memory
+      - (e) Google or Alibaba cluster traces, more servers and seeds

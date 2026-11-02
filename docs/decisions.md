@@ -273,3 +273,9 @@ Format: **Decision** · Alternatives · Why. Add an entry whenever a non-obvious
   - **θ × admission grid:** no region of consistent improvement. The best bursty cell (θ 100, admission 0.5: −0.8 pp SLA, 4/5) has worse neighbours on every side, which fits chance among ~50 cells (D26 caveat).
 - **Interpretation:** the only settings that help are the ones that *weaken* the risk machinery, by moving Δ toward 0. Under bursts every server is far above any threshold at once, so P_risk ≈ 1 everywhere and carries no ranking information (D21 holds whatever θ is). The primary outcome is not met at any swept setting.
 - **Status:** defaults stay frozen (θ 80/85, admission 0.5, w_R 0.4, W 10). The write-up reports the admission-1.0 finding as an observation, not a retuned headline.
+
+## D28 — Curated figures are committed under `docs/figures/`; `results/` stays gitignored
+- **Decision:** the six PNGs that the README and `docs/results.md` cite are copied from `results/figures/` into `docs/figures/` and committed. `results/` (CSVs, logs, regenerated figures) stays ignored.
+- **Alternatives:** un-ignore `results/figures/` (generated and curated files mixed together, and every rerun shows up as a diff); embed no figures (the README is far weaker on GitHub); Git LFS (unnecessary for about 0.8 MB).
+- **Why:** generated outputs are disposable, but the evidence behind a written claim must be versioned alongside that claim. Copying is an explicit step, so the figures only change when the write-up is updated.
+- **Cost:** the snapshot can drift from the code. After any change that affects results, rerun the experiments and copy the figures again.

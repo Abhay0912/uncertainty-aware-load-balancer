@@ -1,6 +1,6 @@
 # Uncertainty-Aware Probabilistic Load Balancing
 
-**Repository:** https://github.com/YOUR-GITHUB-USERNAME/uncertainty-aware-load-balancer
+**Repository:** https://github.com/Abhay0912/uncertainty-aware-load-balancer
 <!-- TODO: replace YOUR-GITHUB-USERNAME once the GitHub repo is created -->
 
 M.Tech Cloud Computing project, NIT Warangal (2026). A discrete-time Python simulation compares a load balancer

@@ -1,7 +1,6 @@
 # Uncertainty-Aware Probabilistic Load Balancing
 
-**Repository:** https://github.com/YOUR-GITHUB-USERNAME/uncertainty-aware-load-balancer
-<!-- TODO: replace YOUR-GITHUB-USERNAME once the GitHub repo is created -->
+**Repository:** https://github.com/Abhay0912/uncertainty-aware-load-balancer
 
 M.Tech Cloud Computing project, NIT Warangal (2026). A discrete-time Python simulation compares a load balancer
 that scores servers by **estimated overload probability** (from the rolling mean *and variance* of recent
@@ -83,7 +82,7 @@ and turning admission off reproduces it decision for decision.
 Requires Python ≥ 3.11.
 
 ```powershell
-git clone https://github.com/YOUR-GITHUB-USERNAME/uncertainty-aware-load-balancer.git
+git clone https://github.com/Abhay0912/uncertainty-aware-load-balancer.git
 cd uncertainty-aware-load-balancer
 python -m venv .venv
 .venv\Scripts\Activate.ps1            # Linux/macOS: source .venv/bin/activate

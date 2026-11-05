@@ -56,3 +56,4 @@ python -m experiments.plots         # -> results/figures/
 - [x] 6 Evaluation metrics + multi-seed runner
 - [x] 7 Plots + sensitivity analysis
 - [x] 8 README, results write-up, interview pack
+- [x] 9 Final report (LaTeX, `report/`) + presentation (`presentation/`)

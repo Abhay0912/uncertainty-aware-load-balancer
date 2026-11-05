@@ -1,0 +1,826 @@
+\documentclass[11pt,a4paper]{report}
+
+% ---------------------------------------------------------------------------
+% Title-page details (edit these)
+\newcommand{\studentname}{Abhay Nagesh Rao}
+\newcommand{\studentroll}{\textit{(enter roll number)}}
+\newcommand{\courseinfo}{Cloud Computing --- M.Tech (CSE)}
+\newcommand{\guidename}{\textit{(enter course instructor)}}
+\newcommand{\repourl}{\url{https://github.com/Abhay0912/uncertainty-aware-load-balancer}}
+% ---------------------------------------------------------------------------
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{setspace}
+\usepackage[hidelinks]{hyperref}
+
+\graphicspath{{figures/}{../docs/figures/}}
+\setstretch{1.15}
+\setlist{itemsep=2pt,topsep=4pt}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\newcommand{\prisk}{P_{\mathrm{risk}}}
+\newcommand{\pc}{P_{C}}
+\newcommand{\pmem}{P_{M}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+
+% ============================================================== title page
+\begin{titlepage}
+  \centering
+  \vspace*{1.5cm}
+  {\LARGE\bfseries Uncertainty-Aware Probabilistic Load Balancing\par}
+  \vspace{0.4cm}
+  {\large Estimating Overload Risk from Metric Variability:\\
+  A Simulation Study against Six Baselines\par}
+  \vspace{1.8cm}
+  {\large Final Project Report\par}
+  \vspace{0.3cm}
+  {\large \courseinfo\par}
+  \vspace{1.8cm}
+  {\large Submitted by\par}
+  \vspace{0.2cm}
+  {\Large\bfseries \studentname\par}
+  \vspace{0.1cm}
+  {\large Roll No.: \studentroll\par}
+  \vspace{1.2cm}
+  {\large Under the guidance of\par}
+  \vspace{0.2cm}
+  {\large \guidename\par}
+  \vfill
+  {\large Department of Computer Science and Engineering\\
+  National Institute of Technology Warangal\par}
+  \vspace{0.3cm}
+  {\large November 2026\par}
+  \vspace{0.5cm}
+  {\small Code and data: \repourl\par}
+\end{titlepage}
+
+% ============================================================== abstract
+\pagenumbering{roman}
+\begin{abstract}
+\noindent
+Most load balancers place work using the \emph{current} value of a server metric, so two servers at 60\%
+CPU look identical even if one is steady and the other swings between 30\% and 90\%. This project asks
+whether the \emph{variability} of recent metrics can be used to estimate overload risk and improve task
+assignment. For each server, the proposed policy keeps the rolling mean and standard deviation of CPU and
+memory over the last $W=10$ samples. It converts them into threshold-exceedance probabilities with a
+normal approximation and combines them into an overload risk $\prisk$. The final score is
+$S_i = 0.6\,L_i + 0.4\,\prisk$, where $L_i$ is a current-load score, and an admission rule filters out
+high-risk servers.
+
+The policy is evaluated in a seeded, discrete-time Python simulator with five heterogeneous servers, under
+stable and bursty workloads of equal mean load. It is compared with six baselines: Round Robin, Weighted
+Round Robin, Random, Least CPU, Power of Two Choices, and a risk-free weighted-metric policy. That last one
+is the proposed policy with the risk term removed. Every policy receives the identical task stream. All
+parameters were fixed before any result was seen, and results are reported as per-seed paired differences
+over five seeds.
+
+Load-awareness dominates. Policies that ignore server state overload the slowest server and reach mean
+response times of about 850\,s, against about 6\,s for load-aware policies. Using a load signal that
+includes queued demand was essential. The risk term, however, did \textbf{not} improve on its ablation. It
+was slightly worse under the stable workload ($+0.29$\,s mean response, better on none of the five seeds)
+and indistinguishable under bursts ($+0.18 \pm 0.85$\,s). The risk estimate was well
+calibrated (predicted 0.74 vs.\ observed 0.72 under bursts) but not discriminative: a load-aware balancer
+equalises the servers, and bursts push all of them far above the threshold together, so $\prisk \approx 1$
+everywhere and carries no ranking information. A pre-declared sensitivity analysis over the threshold, the
+admission rule, the risk weight and the window length confirmed that this null result is robust. The report
+closes with the conditions under which variance-aware placement should help, namely servers with differing
+volatility, and how the policy would be deployed on a real cloud platform.
+\end{abstract}
+
+\tableofcontents
+\listoffigures
+\listoftables
+\clearpage
+\pagenumbering{arabic}
+
+% ============================================================== 1 introduction
+\chapter{Introduction}
+
+\section{Motivation}
+Cloud services place incoming work, whether requests, tasks or containers, onto a pool of servers. The
+quality of that placement decides response time, SLA compliance and how much capacity must be provisioned.
+Production load balancers mostly rely on simple rules: Round Robin, weighted variants that reflect
+capacity, ``least connections'' or ``least loaded'' rules that read a current metric, and randomised rules
+such as Power of Two Choices~\cite{mitzenmacher2001,azar1999}.
+
+Rules that read a \emph{current} value ignore how stable that value is. Consider two servers that both
+report 60\% CPU. The first is steady. The second oscillates between 30\% and 90\%. A least-loaded policy
+treats them as equal, yet the second is much more likely to cross an overload threshold of, say, 80\% in
+the near future. If recent variability predicts overload, a balancer that accounts for it might avoid
+the servers most likely to become hot spots, which drive tail latency in large systems~\cite{dean2013}.
+
+\section{Research question}
+\begin{quote}
+\itshape How can recent server metrics and their variability be used to estimate overload risk and improve
+task assignment compared with simple load-balancing policies?
+\end{quote}
+The \textbf{primary outcome}, fixed before the experiments, is whether the proposed method reduces SLA
+violations and observed overload frequency under \emph{bursty} demand, without an unacceptable loss of
+throughput or increase in response time.
+
+\section{Scope}
+This is a simulation-based comparison. It is not a production scheduler, and it does not claim a new
+general-purpose algorithm. Risk values are heuristic proxies computed from past observations, not
+calibrated forecasts of the state after an assignment. Results are reported as measured, and no
+improvement was assumed in advance.
+
+\section{Contributions}
+\begin{enumerate}
+  \item A seeded, discrete-time simulator of a heterogeneous five-server cluster. It has a reservation-based
+        resource model, local FIFO queues, and stable and bursty workloads with \emph{matched} mean load.
+  \item An implementation of the uncertainty-aware policy and six baselines behind one policy interface.
+        A test proves that the proposed policy with its risk term removed reproduces the weighted-metric
+        baseline decision for decision, which makes that baseline an exact ablation.
+  \item A fair evaluation protocol: an identical task stream for every policy, servers rebuilt for each run,
+        parameters frozen before results, paired comparison by seed, and a pre-declared sensitivity
+        analysis in which the ablation is rerun at every point.
+  \item An empirical result with a mechanism. The risk estimate is calibrated but not discriminative,
+        because load-aware balancing removes the differences between servers that the risk score would need
+        in order to rank them.
+  \item A practical finding about observability. CPU utilisation hides queued backlog, and observing load
+        that includes queued demand changes the ranking of every load-aware policy.
+\end{enumerate}
+
+\section{Organisation}
+Chapter~\ref{ch:background} reviews load-balancing policies and probabilistic risk estimation.
+Chapter~\ref{ch:method} defines the proposed policy. Chapter~\ref{ch:sim} describes the simulator and
+Chapter~\ref{ch:eval} the evaluation methodology. Chapters~\ref{ch:results} and~\ref{ch:sens} present the
+results and the sensitivity analysis. Chapter~\ref{ch:discussion} discusses the findings and deployment on a
+real cloud, Chapter~\ref{ch:threats} lists threats to validity, and Chapter~\ref{ch:conclusion} concludes.
+
+% ============================================================== 2 background
+\chapter{Background and Related Work}\label{ch:background}
+
+\section{Static policies}
+\textbf{Round Robin} sends task $k$ to server $k \bmod N$. It needs no state and spreads work evenly by
+count, but it is blind to both capacity and load. \textbf{Weighted Round Robin} assigns tasks in proportion
+to fixed weights, typically capacity. The \emph{smooth} variant used in nginx~\cite{nginx} interleaves
+servers, so a heavy server does not receive long consecutive runs. Static policies cannot react to
+transient overload.
+
+\section{Load-aware and randomised policies}
+\textbf{Least-loaded} rules, such as least connections or least CPU, choose the server with the smallest
+current metric. With fresh information they balance well. With stale information they \emph{herd}: every
+dispatcher sends work to the same apparently idle server. \textbf{Power of Two Choices} (P2C) samples two
+servers at random and picks the less loaded one. For $n$ balls in $n$ bins, this reduces the maximum load
+from $\Theta(\log n / \log\log n)$ to $\Theta(\log\log n)$~\cite{azar1999,mitzenmacher2001}, and it is
+robust to stale information. Join-Idle-Queue~\cite{lu2011} and related schemes target large dispatcher
+fleets. Cluster managers such as Borg~\cite{verma2015} combine feasibility filtering with a scoring
+function, a structure the proposed policy shares.
+
+\section{Variability and probabilistic risk}
+Cluster traces show that resource usage is highly variable and heterogeneous over time~\cite{reiss2012,tirmazi2020},
+which motivates using variance as well as level. Treating a metric as a random variable with mean $\mu$
+and standard deviation $\sigma$ gives a natural risk measure, the probability of exceeding a threshold
+$\theta$. Under a normal approximation, $P(X > \theta) = 1 - \Phi((\theta-\mu)/\sigma)$. Probabilistic
+forecasts are judged by \emph{calibration}, whether predicted probabilities match observed frequencies, and
+by \emph{sharpness} or discrimination, whether they separate cases~\cite{gneiting2007}. That distinction
+turns out to be central to the results of this project.
+
+% ============================================================== 3 method
+\chapter{Proposed Method}\label{ch:method}
+
+\section{Observed metrics and rolling statistics}
+For each server $i$, the balancer observes CPU $C_i(t)$ and memory $M_i(t)$ once per tick, together with
+the response times of tasks it completes. A rolling window holds the latest $W=10$ samples. The policy
+computes the mean and the \emph{population} standard deviation:
+\begin{equation}
+  \mu_C = \frac{1}{W}\sum_{t} C_i(t), \qquad
+  \sigma_C = \sqrt{\frac{1}{W}\sum_{t}\bigl(C_i(t)-\mu_C\bigr)^2},
+\end{equation}
+and likewise $\mu_M, \sigma_M$ for memory. Following a finding during development (Section~\ref{sec:backlog}),
+$C_i$ and $M_i$ are \emph{load} percentages: running plus queued demand, divided by capacity. They can
+therefore exceed 100\%. True utilisation, bounded by 100\%, is still logged and used for evaluation.
+
+\section{Overload probability}
+With thresholds $\theta_C = 80\%$ and $\theta_M = 85\%$:
+\begin{equation}
+  \pc = 1 - \Phi\!\left(\frac{\theta_C - \mu_C}{\sigma_C}\right), \qquad
+  \pmem = 1 - \Phi\!\left(\frac{\theta_M - \mu_M}{\sigma_M}\right),
+\end{equation}
+where $\Phi(z) = \tfrac12\bigl(1 + \operatorname{erf}(z/\sqrt2)\bigr)$ is the standard normal CDF. If
+$\sigma = 0$, the window is a point mass and the probability is deterministic: $P = 1$ if $\mu > \theta$,
+and $0$ otherwise. The window's standard deviation returns exactly zero when all samples are equal, so that
+floating-point noise of order $10^{-15}$ cannot produce $\Phi(\pm 10^{16})$.
+
+Variance acts in both directions. Below the threshold, a larger $\sigma$ \emph{raises} the risk, because the
+tail reaches $\theta$. Above the threshold, a larger $\sigma$ \emph{lowers} it, because some mass falls back
+below $\theta$. For the motivating example, a steady server at 60\% has $P=0$, while one at
+$60 \pm 30\%$ has $P = 1-\Phi(0.67) \approx 0.25$.
+
+Assuming CPU and memory exceedances are independent, the combined risk is the probability that at least
+one occurs:
+\begin{equation}
+  \prisk = 1 - (1-\pc)(1-\pmem).
+\end{equation}
+
+\section{Risk-adjusted score and admission}
+Let $\bar R_i$ be the mean response time of the server's last $W$ completions, normalised as
+$r_i = \bar R_i/(\bar R_i + R_{\mathrm{ref}})$ with $R_{\mathrm{ref}} = 6$\,s, the mean task work. The
+current-load score and the risk-adjusted score are
+\begin{align}
+  L_i &= 0.4\,\frac{C_i}{100} + 0.4\,\frac{M_i}{100} + 0.2\,r_i, \\
+  S_i &= 0.6\,L_i + 0.4\,\prisk.
+\end{align}
+Here $C_i, M_i$ in $L_i$ are \emph{live} values that include tasks already placed in the same tick, while
+$\prisk$ comes from the window. Servers with $\prisk > 0.5$ are excluded when at least one server is at or
+below that level. If every server exceeds it, the policy chooses the lowest $S_i$ among all servers and
+records the decision as \textbf{capacity pressure}. Algorithm~\ref{alg:prob} summarises one decision.
+
+\begin{algorithm}[H]
+\caption{One decision of the probabilistic policy}\label{alg:prob}
+\begin{algorithmic}[1]
+\Require servers $1..N$ with rolling windows; thresholds $\theta_C, \theta_M$; admission level $a=0.5$
+\For{$i = 1$ \textbf{to} $N$}
+  \State $(\mu_C,\sigma_C), (\mu_M,\sigma_M) \gets$ window statistics of server $i$
+  \State $\pc \gets$ \Call{Exceed}{$\mu_C, \sigma_C, \theta_C$}; \quad $\pmem \gets$ \Call{Exceed}{$\mu_M, \sigma_M, \theta_M$}
+  \State $P_{\mathrm{risk},i} \gets 1 - (1-\pc)(1-\pmem)$
+  \State $S_i \gets 0.6\,L_i + 0.4\,P_{\mathrm{risk},i}$ \Comment{$L_i$ from live load and response window}
+\EndFor
+\State $E \gets \{ i : P_{\mathrm{risk},i} \le a \}$
+\If{$E = \emptyset$} \State $E \gets \{1..N\}$; mark decision as capacity pressure \EndIf
+\State \Return $\arg\min_{i \in E} S_i$ \Comment{ties go to the lowest index}
+\Statex
+\Function{Exceed}{$\mu, \sigma, \theta$}
+  \If{$\sigma = 0$} \Return $[\mu > \theta]$ \EndIf
+  \State \Return $1 - \Phi\bigl((\theta-\mu)/\sigma\bigr)$
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+Each decision costs $O(N)$ time. The rolling statistics cost $O(W)$ per server per tick, or $O(1)$ with
+running sums, so the policy is as cheap as a least-loaded rule.
+
+\section{The ablation}
+The \textbf{weighted-metric} baseline chooses the lowest $L_i$ with no risk term and no admission rule. It
+is exactly the proposed policy with score weights $(1,0)$ and admission level $1.0$, and a unit test
+confirms that the two produce identical assignments under that setting. Any difference between the two
+policies therefore comes only from the risk term and the admission rule. Beating Round Robin would only
+show that load-awareness helps. Beating this baseline is the only evidence that \emph{uncertainty} helps.
+
+% ============================================================== 4 simulator
+\chapter{Simulation Design}\label{ch:sim}
+
+\section{Time model and architecture}
+The simulator is time-stepped, with one tick equal to one second. Each tick performs three steps:
+\begin{enumerate}
+  \item dispatch the tasks arriving at this tick, one at a time, through the policy;
+  \item sample every server's metrics into its rolling window and the log;
+  \item advance every server, finishing tasks and starting queued ones.
+\end{enumerate}
+Sampling happens \emph{before} the step, so a task that starts and finishes within one tick still appears
+in utilisation. Policies implement a common interface (\code{reset}, \code{select}, \code{decision\_info})
+and only \emph{read} server state. A contract test compares full server state before and after every
+policy call. Figure~\ref{fig:arch} shows the data flow.
+
+\begin{figure}[H]
+\centering
+\small
+\begin{tabular}{c}
+\fbox{\parbox{0.8\linewidth}{\centering \code{config.py}: every parameter as a frozen, validated dataclass}}\\[2pt]
+$\downarrow$\\
+\fbox{\parbox{0.8\linewidth}{\centering \code{WorkloadGenerator(seed, kind)}: one immutable task list per (workload, seed)}}\\[2pt]
+$\downarrow$ \textit{same list for all 7 policies}\\
+\fbox{\parbox{0.8\linewidth}{\centering \code{simulate(tasks, policy)}: fresh servers; dispatch $\rightarrow$ sample $\rightarrow$ step; drain until idle}}\\[2pt]
+$\downarrow$ \textit{task and per-interval logs}\\
+\fbox{\parbox{0.8\linewidth}{\centering \code{evaluation.py}: metrics per run, seed aggregation, paired differences}}\\[2pt]
+$\downarrow$\\
+\fbox{\parbox{0.8\linewidth}{\centering \code{run\_all} (70 runs) \quad \code{sensitivity} (44 points) \quad \code{plots} (6 figures)}}
+\end{tabular}
+\caption{Simulator data flow.}\label{fig:arch}
+\end{figure}
+
+\section{Server model}
+Five heterogeneous servers are used (Table~\ref{tab:servers}). A task reserves its CPU cores and memory for
+its whole run. It starts only if both fit; otherwise it waits in the server's strict FIFO queue. Run time
+is $\lceil \text{work}/\text{speed} \rceil$ ticks. Overload therefore appears as \emph{queueing delay},
+which the response-time and SLA metrics capture. Utilisation stays within $[0,100]$, and the queue is the
+separate signal of excess load.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cccccc}
+\toprule
+Server & Cores & Memory (GB) & Speed & Capacity (cores $\times$ speed) & WRR weight\\
+\midrule
+0 & 4 & 8  & 1.0 & 4.0  & 4.0\\
+1 & 4 & 8  & 1.0 & 4.0  & 4.0\\
+2 & 8 & 16 & 1.5 & 12.0 & 12.0\\
+3 & 8 & 16 & 2.0 & 16.0 & 16.0\\
+4 & 2 & 4  & 0.5 & 1.0  & 1.0\\
+\midrule
+Total & 26 & 52 & & 37.0 & \\
+\bottomrule
+\end{tabular}
+\caption{Server configuration. Server 4 holds 1/37 of the capacity.}\label{tab:servers}
+\end{table}
+
+\section{Workloads}
+Each task has a CPU demand $\sim U(0.5, 1.5)$ cores, a memory demand $\sim U(0.5, 3)$\,GB, and work drawn
+from a lognormal distribution with mean 6\,s and shape $\sigma=0.6$, truncated at 1\,s. Arrivals are
+Poisson per tick for $T_{\mathrm{sim}} = 1000$ ticks, after which the system drains until every task has
+finished. The base rate $\lambda_0 \approx 4$ tasks/s gives about 65\% mean offered load, computed as
+expected core-seconds per second divided by the total capacity $\sum \text{cores} \times \text{speed}$.
+
+\begin{itemize}
+  \item \textbf{Stable:} a $\pm 20\%$ sinusoidal drift in the arrival rate, with a period of 500\,s.
+  \item \textbf{Bursty:} four bursts of 50\,s with $3\times$ arrivals and $1.3\times$ CPU demand. The base
+        rate is scaled down so that the \emph{mean} offered load equals that of the stable workload, about
+        41\% between bursts and about 160\% during them.
+\end{itemize}
+Matching the mean load ensures that ``bursty is worse'' measures variability, not extra load.
+
+\section{Reproducibility and fairness}
+\begin{itemize}
+  \item Randomness is passed explicitly as seeded \code{numpy.random.Generator} objects~\cite{harris2020}.
+        One \code{SeedSequence} per seed is split into independent streams for bursts, arrivals, CPU,
+        memory and work. The global NumPy generator is never used, and a test checks this.
+  \item The task list is generated once per (workload, seed) and passed unchanged to all seven policies.
+        Servers are rebuilt and policies reset for every run.
+  \item Randomised policies (Random, P2C) draw from their own seeded stream, so they cannot perturb the
+        workload.
+  \item Every run drains to completion. A hard cutoff would drop exactly the slowest tasks and flatter the
+        policies that overload servers.
+  \item 156 automated tests cover formula edge cases ($\sigma=0$, every server risky, the bidirectional
+        effect of variance), determinism, fairness, and the ablation identity.
+\end{itemize}
+
+\section{Baselines}
+\begin{table}[H]
+\centering
+\begin{tabularx}{\linewidth}{lY}
+\toprule
+Policy & Rule\\
+\midrule
+Round Robin (RR) & Cyclic order $0,1,\dots,N-1$.\\
+Weighted RR (WRR) & Smooth weighted round robin~\cite{nginx} with weights cores $\times$ speed.\\
+Random & Uniform over servers (seeded).\\
+Least CPU & Lowest live CPU load $C_i$.\\
+Weighted metric (WM) & Lowest $L_i$; the proposed policy without the risk term (the ablation).\\
+P2C & Sample two distinct servers, choose the lower $L_i$ (seeded).\\
+\textbf{Probabilistic} & Lowest $S_i$ among admissible servers (Chapter~\ref{ch:method}).\\
+\bottomrule
+\end{tabularx}
+\caption{Policies compared.}\label{tab:policies}
+\end{table}
+
+\section{Development finding: utilisation hides backlog}\label{sec:backlog}
+In early runs, every load-aware policy lost to capacity-aware but load-\emph{blind} WRR. The cause was
+fragmentation. The 2-core server had a queue of 424 tasks, yet showed only about 62\% CPU, because the task at
+the head of its queue could not fit beside the one already running. Utilisation therefore looked moderate, and
+load-aware policies kept feeding the server. The fix changed the \emph{observed signal}, not the formulas:
+the balancer sees load as (running $+$ queued demand) $\div$ capacity. With no queue, this equals
+utilisation. Results for the load-blind policies were verified to be byte-identical after the change.
+Under the stable workload, the change cut Least CPU's mean response from 907\,s to 6.5\,s and the weighted
+metric's from 236\,s to 6.4\,s. It mirrors why Linux load average counts waiting tasks, not just running ones.
+
+% ============================================================== 5 evaluation
+\chapter{Evaluation Methodology}\label{ch:eval}
+
+\section{Metrics}
+\begin{table}[H]
+\centering
+\begin{tabularx}{\linewidth}{lYc}
+\toprule
+Metric & Definition & Better\\
+\midrule
+Mean / p95 response & Completion $-$ arrival over completed tasks (queue wait included) & lower\\
+SLA violation rate & Fraction of tasks with response $> R_{\mathrm{SLA}} = 18$\,s ($3\times$ mean work) & lower\\
+Throughput & Completed tasks $\div$ makespan & higher\\
+Avg.\ CPU utilisation & Time-average of true utilisation over $[0, T_{\mathrm{sim}})$ & context\\
+Load imbalance & Mean over $t$ of the standard deviation of utilisation across servers & context\\
+Overload frequency & Fraction of server-intervals with $C > \theta_C$ or $M > \theta_M$, on utilisation and on load & lower\\
+Calibration & Mean chosen $\prisk$ vs.\ observed load-overload frequency & diagnostic\\
+Capacity pressure & Fraction of decisions in which every server had $\prisk > 0.5$ & diagnostic\\
+\bottomrule
+\end{tabularx}
+\caption{Evaluation metrics.}\label{tab:metrics}
+\end{table}
+
+Interval metrics are averaged over the arrival horizon $[0, T_{\mathrm{sim}})$, the only window in which
+every policy faces the same offered load. Otherwise Round Robin's drain tail of roughly 7{,}000\,s would
+dominate them. Imbalance is context only, because servers differ in speed: equal utilisation on a slow
+server means longer tasks.
+
+\section{Design of the comparison}
+\begin{itemize}
+  \item \textbf{Matrix:} 7 policies $\times$ 2 workloads $\times$ 5 seeds $=$ 70 runs.
+  \item \textbf{Pre-declaration:} $\theta$, the weights, $W$, the admission level and $R_{\mathrm{SLA}}$ were
+        fixed before any results and never changed.
+  \item \textbf{Paired comparison:} matched seeds share a task list, so the per-seed difference
+        $\Delta = \text{probabilistic} - \text{WM}$ cancels workload noise. The report gives the mean $\Delta$,
+        its standard deviation, and the number of seeds won. With five seeds, a 5/5 or 0/5 outcome has
+        one-sided sign-test $p = 1/32 \approx 0.03$. Confidence intervals were not used, because with $n=5$
+        they are wide and lean on a normality assumption.
+\end{itemize}
+
+% ============================================================== 6 results
+\chapter{Results}\label{ch:results}
+
+\section{All policies}
+Table~\ref{tab:main} and Figure~\ref{fig:comparison} summarise the 70 runs.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+& \multicolumn{3}{c}{Stable} & \multicolumn{3}{c}{Bursty}\\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Policy & Resp.\ (s) & SLA viol. & Thr.\ (/s) & Resp.\ (s) & SLA viol. & Thr.\ (/s)\\
+\midrule
+Round Robin     & $857 \pm 30$   & 59.2\% & 0.49 & $821 \pm 25$  & 60.0\% & 0.46\\
+Random          & $847 \pm 40$   & 58.7\% & 0.50 & $823 \pm 35$  & 59.2\% & 0.46\\
+Weighted RR     & $9.1 \pm 1.7$  & 7.4\%  & 3.51 & $30.9 \pm 5.2$ & 57.8\% & 3.20\\
+P2C             & $24.8 \pm 4.2$ & 28.2\% & 3.26 & $46.4 \pm 7.3$ & 58.2\% & 2.76\\
+Least CPU       & $6.16 \pm 0.61$ & 2.9\% & 3.94 & $29.2 \pm 4.8$ & 54.1\% & 3.43\\
+Weighted metric & $\mathbf{6.15 \pm 0.62}$ & \textbf{2.7\%} & 3.95 & $29.3 \pm 4.9$ & \textbf{53.5\%} & 3.41\\
+\textbf{Probabilistic} & $6.44 \pm 0.74$ & 3.4\% & 3.93 & $29.5 \pm 5.2$ & 53.9\% & 3.41\\
+\bottomrule
+\end{tabular}
+\caption{Mean $\pm$ standard deviation over five seeds. SLA threshold $R_{\mathrm{SLA}} = 18$\,s.}\label{tab:main}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig1_policy_comparison.png}
+\caption{Mean response time (log scale) and SLA violation rate, mean $\pm$ std over five seeds.}\label{fig:comparison}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+& \multicolumn{2}{c}{Stable} & \multicolumn{2}{c}{Bursty}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Policy & p95 resp.\ (s) & Overload (util) & p95 resp.\ (s) & Overload (util)\\
+\midrule
+Round Robin     & 5378 & 32.5\% & 5087 & 39.2\%\\
+Random          & 5370 & 35.2\% & 5156 & 39.3\%\\
+Weighted RR     & 23.6 & 43.4\% & 77.4 & 48.4\%\\
+P2C             & 96.4 & 50.9\% & 148.6 & 54.6\%\\
+Least CPU       & 15.0 & 43.5\% & 81.8 & 49.6\%\\
+Weighted metric & 14.8 & 43.1\% & 82.7 & 49.1\%\\
+Probabilistic   & 15.8 & 44.3\% & 85.0 & 48.0\%\\
+\bottomrule
+\end{tabular}
+\caption{Tail latency and overload frequency on true utilisation (mean over five seeds).}\label{tab:tail}
+\end{table}
+
+\paragraph{Load-blind policies collapse.} Round Robin and Random give the 2-core, 0.5-speed server one
+fifth of all tasks, although it holds 1/37 of the capacity. It builds a backlog of hundreds of tasks that
+takes about 7{,}000\,s to drain. Their low overload figures are misleading: the other four servers sit
+largely idle.
+
+\paragraph{Capacity awareness is not enough under bursts.} Weighted RR is competitive on the stable
+workload (9.1\,s) but cannot react to a spike, and it has 57.8\% SLA violations under bursts.
+
+\paragraph{P2C is weak at $N=5$.} A two-server sample misses the fastest server, which holds 16 of 37
+capacity units, 60\% of the time. P2C's strengths, large $N$ and stale information, do not apply here.
+
+\paragraph{Bursts overwhelm every policy.} Over half of all tasks violate the SLA under every policy,
+because offered load reaches about 160\% of capacity during a burst. Among the load-aware policies,
+differences are a few percent.
+
+\section{The ablation: does the risk term help?}
+Table~\ref{tab:paired} and Figure~\ref{fig:paired} give the per-seed paired comparison of the
+probabilistic policy against the weighted-metric ablation.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{llrc}
+\toprule
+Workload & Metric & $\Delta$ (mean $\pm$ std) & Seeds won by probabilistic\\
+\midrule
+\multirow{4}{*}{stable} & Mean response & $+0.29 \pm 0.25$\,s & 0/5\\
+ & SLA violation rate & $+0.69 \pm 0.52$\,pp & 0/5\\
+ & Overload (utilisation) & $+1.21 \pm 0.83$\,pp & 0/5\\
+ & Throughput & $-0.023 \pm 0.061$\,/s & 1/5\\
+\midrule
+\multirow{4}{*}{bursty} & Mean response & $+0.18 \pm 0.85$\,s & 3/5\\
+ & SLA violation rate & $+0.45 \pm 1.82$\,pp & 2/5\\
+ & Overload (utilisation) & $-1.06 \pm 1.52$\,pp & 4/5\\
+ & Throughput & $+0.001 \pm 0.075$\,/s & 1/5 (2 ties)\\
+\bottomrule
+\end{tabular}
+\caption{Paired difference $\Delta$ = probabilistic $-$ weighted metric. Negative is better for the
+probabilistic policy, except throughput.}\label{tab:paired}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig2_paired_by_seed.png}
+\caption{Per-seed paired differences (dots) and their mean (bar). Below zero means the risk term helped.}\label{fig:paired}
+\end{figure}
+
+\textbf{The primary outcome is not met.} Under the stable workload, the risk term is slightly but
+consistently harmful (0/5 seeds; sign test $p \approx 0.03$). Under bursts, every difference lies well inside
+the seed-to-seed noise. The one favourable number, a 1.06\,pp drop in overload frequency (4/5 seeds), is
+smaller than its own standard deviation.
+
+\section{Why: calibrated but not discriminative}
+The risk model is not \emph{wrong}. Figure~\ref{fig:calibration} plots the mean $\prisk$ of the chosen
+server against the observed fraction of server-intervals in which the load signal exceeded $\theta$. The
+points lie close to the identity line: 0.62 vs.\ 0.62 under the stable workload and 0.74 vs.\ 0.72 under
+bursts.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\linewidth]{fig3_calibration.png}
+\caption{Calibration: predicted risk vs.\ observed overload frequency, one point per seed.}\label{fig:calibration}
+\end{figure}
+
+It is, however, uninformative for \emph{ranking}. A load-aware balancer equalises the observed signal, so
+servers rise and fall together (Figure~\ref{fig:timeseries}). During a burst, all five reach 10--20$\times$
+their capacity at once. Every server then has $\prisk \approx 1$, the admission rule finds no eligible
+server, and the decision falls back to capacity pressure. This happened in 57\% of decisions under the
+stable workload and 73\% under bursts. In that state, $S_i = 0.6 L_i + 0.4 \cdot 1$ ranks servers exactly
+as $L_i$ does. Variance can only add information when servers \emph{differ} in volatility at similar mean
+load, and a good load-aware balancer erodes exactly that difference. In the terms of~\cite{gneiting2007},
+the forecast is calibrated but has almost no sharpness across the alternatives being compared.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig4_load_timeseries.png}
+\caption{Bursty workload, seed 0: CPU load per server (10-tick mean, log scale) under the weighted-metric
+and probabilistic policies. Shaded regions are bursts; the dashed line is $\theta_C = 80\%$.}\label{fig:timeseries}
+\end{figure}
+
+% ============================================================== 7 sensitivity
+\chapter{Sensitivity Analysis}\label{ch:sens}
+
+\section{Design}
+The null result could reflect poorly chosen parameters, so four axes were declared in advance, based on
+the diagnostics above, and swept one at a time around the frozen defaults:
+\begin{itemize}
+  \item threshold $\theta_C \in \{60, 80, 100, 120, 150\}$, with $\theta_M = \theta_C + 5$. Values above
+        100 are meaningful on the load signal, because backlog counts;
+  \item admission level $\in \{0.3, 0.5, 0.7, 0.9, 1.0\}$, where 1.0 disables filtering;
+  \item risk weight $w_R \in \{0, 0.2, 0.4, 0.6, 0.8\}$, with $S = (1-w_R)L + w_R \prisk$;
+  \item window $W \in \{5, 10, 20, 40\}$.
+\end{itemize}
+A $\theta \times$ admission grid was added because those two parameters were predicted to interact. In
+total there are 44 configuration points, each run on both workloads and all five seeds. At \emph{every} point,
+the weighted-metric ablation is rerun under the same configuration, so $\Delta$ still isolates the risk
+term. Outcomes are always scored at the frozen $\theta = 80/85$ and $R_{\mathrm{SLA}} = 18$\,s. Otherwise
+raising $\theta$ would ``reduce overload'' by definition.
+
+\section{Results}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig5_sensitivity.png}
+\caption{One-axis-at-a-time sensitivity. $\Delta$ = probabilistic $-$ weighted metric (band: $\pm1$ std
+over seeds); bottom row: capacity-pressure rate. Dotted lines mark the frozen defaults.}\label{fig:sensitivity}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\begin{tabularx}{\linewidth}{lY}
+\toprule
+Axis & Finding\\
+\midrule
+$\theta_C$ & Raising $\theta$ to 150 cuts stable capacity pressure from 57\% to 10\%, and $\Delta$ moves to about
+zero ($+0.29 \rightarrow -0.03$\,s) without becoming a consistent win. Bursty pressure stays at 67--80\% for
+every $\theta$, and bursty $\Delta$ changes sign from point to point with no trend.\\
+Admission & The only consistent pattern. At 1.0, with no filtering, stable is $-0.08$\,s (5/5 seeds) and
+bursty $-0.20$\,s (4/5), about a 1\% effect. Capacity pressure is zero there by definition. The admission
+filter is the component that hurts.\\
+Risk weight & Stable gets steadily worse as $w_R$ grows ($+0.19 \rightarrow +0.73$\,s, 0/5 at every
+point). Bursty stays flat around zero.\\
+Window $W$ & $W=40$ is marginally better than $W=10$ (3--4/5 seeds), inside the noise.\\
+\bottomrule
+\end{tabularx}
+\caption{Summary of the one-axis sweeps.}\label{tab:sens}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{fig6_theta_admission_grid.png}
+\caption{$\theta \times$ admission grid: mean $\Delta$ in SLA violations (pp) and seeds won. Blue means the
+probabilistic policy is better.}\label{fig:grid}
+\end{figure}
+
+The interaction grid (Figure~\ref{fig:grid}) shows no region of consistent improvement. Its best bursty
+cell ($\theta=100$, admission 0.5: $-0.8$\,pp, 4/5) has worse neighbours on every side. Among roughly 50
+cells, a few 4/5 or 5/5 cells are expected by chance ($p \approx 0.03$ each). A cell was therefore counted
+only if it fitted a trend along its axis.
+
+\textbf{Pattern:} every setting that helps does so by \emph{weakening} the risk machinery, moving the
+policy back toward its ablation. The null result holds across the whole swept range, and the defaults
+were not retuned.
+
+% ============================================================== 8 discussion
+\chapter{Discussion}\label{ch:discussion}
+
+\section{Interpreting the null result}
+The hypothesis behind the method is sound in isolation. With equal means and different volatility, the
+exceedance probability does separate servers, and the unit tests demonstrate this. The experiment shows
+that this situation does not arise once a load-aware balancer is running. Balancing \emph{itself} drives
+all servers to similar levels and similar dynamics. Variance then becomes a property of the workload, not
+of the server, and a per-server risk score has nothing to rank. Under bursts, the situation is more
+extreme: every server is far above any reasonable threshold together, so no threshold can separate them.
+
+Two further lessons generalise beyond this project.
+\begin{enumerate}
+  \item \textbf{Calibration is not usefulness.} A probability that is right on average can still be
+        useless for a decision if it does not vary across the options. Evaluating a predictive component
+        by calibration alone would have hidden this.
+  \item \textbf{Hard filters are brittle.} The admission rule was the component that hurt most. When it is
+        active and some servers pass it, it excludes servers on the basis of a noisy 10-sample
+        estimate. When every server fails it, it does nothing.
+\end{enumerate}
+
+\section{When variance-aware placement should help}
+The analysis predicts gains when servers \emph{differ} in volatility at similar load. Examples are
+co-located noisy neighbours, tenants with different burstiness, or heterogeneous background jobs. It also
+predicts gains when metrics are stale or sampled, as in production systems that scrape metrics every
+15--60\,s. There, variance expresses uncertainty about the \emph{current} state, not only about future
+fluctuation. Neither condition is present in this setup, so both are natural follow-up experiments.
+
+\section{Deployment on a real cloud platform}
+\begin{itemize}
+  \item \textbf{Metrics:} node exporters publish CPU, memory and queue depth to Prometheus or CloudWatch.
+        Rolling $\mu$ and $\sigma$ correspond to \code{avg\_over\_time} and \code{stddev\_over\_time}
+        over a window.
+  \item \textbf{Request balancing:} a sidecar computes $\prisk$ per backend and publishes it as a load-balancing
+        weight, for example via Envoy's backend load reports or NGINX upstream weights.
+  \item \textbf{Task or pod placement:} the Kubernetes scheduling framework~\cite{k8sframework} separates
+        \emph{filter} and \emph{score} plugins. The admission rule maps to a filter and $S_i$ to a score.
+  \item \textbf{Differences from simulation:} metrics are stale; many dispatchers decide concurrently,
+        which reintroduces herding (the reason P2C exists); and the decision must be cheap. The policy is
+        $O(N)$ per decision with $O(1)$ state updates, so cost is not an obstacle.
+\end{itemize}
+
+% ============================================================== 9 threats
+\chapter{Threats to Validity}\label{ch:threats}
+\begin{itemize}
+  \item \textbf{Distributional assumption.} $\Phi$ assumes a normal metric. The load signal is non-negative,
+        skewed, autocorrelated and regime-switching, and only ten samples are used. Calibration was still
+        good, because the level relative to $\theta$ dominates, but tail estimates during transitions are
+        crude. Alternatives include an empirical exceedance rate, EWMA statistics, or a log-normal model.
+  \item \textbf{Independence.} $1-(1-\pc)(1-\pmem)$ assumes independent CPU and memory exceedances. Queued
+        load couples them, so the formula overestimates the joint risk. The true value lies between
+        $\max(\pc, \pmem)$ and $\min(1, \pc+\pmem)$.
+  \item \textbf{Backward-looking risk.} $\prisk$ comes from past samples, not from the state after the
+        candidate task is placed, and it lags by up to one tick.
+  \item \textbf{Synthetic workload.} Demands are independent draws, and bursts hit all servers equally. Real
+        traces~\cite{reiss2012,tirmazi2020} contain per-tenant correlation and heterogeneous volatility.
+  \item \textbf{Scale.} Five servers and five seeds cannot resolve effects below about 1\%, and small-$N$
+        effects, such as P2C's weakness, do not generalise.
+  \item \textbf{Discretisation.} Whole-tick reservation inflates effective load by about 10\%. This is
+        identical for all policies, so comparisons are fair, but absolute numbers are slightly pessimistic.
+  \item \textbf{Hand-set weights.} The sweep covers each weight one axis at a time, not a joint optimisation.
+\end{itemize}
+
+% ============================================================== 10 conclusion
+\chapter{Conclusion and Future Work}\label{ch:conclusion}
+
+\section{Conclusion}
+This project implemented an uncertainty-aware load balancer that scores servers by the estimated
+probability of exceeding a utilisation threshold. It was evaluated against six baselines in a fair,
+pre-declared simulation study. Three conclusions follow.
+\begin{enumerate}
+  \item Load-aware balancing that \textbf{includes queued demand} is the dominant factor, worth about two
+        orders of magnitude in mean response time over load-blind policies.
+  \item Adding a variance-based overload probability to a good load-aware score did \textbf{not} reduce SLA
+        violations, overload frequency or response time under either workload, at the declared parameters
+        or anywhere in the sensitivity sweep. The primary outcome is not met.
+  \item The mechanism is identified: the risk estimate is \textbf{calibrated but not discriminative},
+        because the balancer equalises servers and bursts saturate all of them together. The hard admission
+        filter was mildly harmful, and a small risk term inside the score was neutral.
+\end{enumerate}
+A negative result obtained under a pre-registered, ablation-based protocol is informative. It shows where
+the idea does not pay off and predicts where it might.
+
+\section{Future work}
+\begin{itemize}
+  \item Servers with \emph{different} volatility (noisy neighbours), the regime in which the hypothesis
+        predicts a gain.
+  \item Post-assignment risk: add the candidate task's demand before computing $P$, so the score reacts to
+        the decision being made.
+  \item Stale or sampled metrics, and multiple concurrent dispatchers.
+  \item Better risk models: empirical or EWMA estimates, and a joint CPU--memory model with correlation.
+  \item Real cluster traces~\cite{reiss2012,tirmazi2020}, larger clusters and more seeds, to resolve effects
+        of about 1\%.
+\end{itemize}
+
+% ============================================================== references
+\begin{thebibliography}{99}
+\bibitem{azar1999} Y.~Azar, A.~Z. Broder, A.~R. Karlin, and E.~Upfal, ``Balanced allocations,''
+  \emph{SIAM Journal on Computing}, vol.~29, no.~1, pp.~180--200, 1999.
+\bibitem{mitzenmacher2001} M.~Mitzenmacher, ``The power of two choices in randomized load balancing,''
+  \emph{IEEE Transactions on Parallel and Distributed Systems}, vol.~12, no.~10, pp.~1094--1104, 2001.
+\bibitem{lu2011} Y.~Lu, Q.~Xie, G.~Kliot, A.~Geller, J.~R. Larus, and A.~Greenberg, ``Join-Idle-Queue: A novel
+  load balancing algorithm for dynamically scalable web services,'' \emph{Performance Evaluation}, vol.~68,
+  no.~11, pp.~1056--1071, 2011.
+\bibitem{dean2013} J.~Dean and L.~A. Barroso, ``The tail at scale,'' \emph{Communications of the ACM},
+  vol.~56, no.~2, pp.~74--80, 2013.
+\bibitem{verma2015} A.~Verma, L.~Pedrosa, M.~Korupolu, D.~Oppenheimer, E.~Tune, and J.~Wilkes,
+  ``Large-scale cluster management at Google with Borg,'' in \emph{Proc.\ EuroSys}, 2015.
+\bibitem{reiss2012} C.~Reiss, A.~Tumanov, G.~R. Ganger, R.~H. Katz, and M.~A. Kozuch, ``Heterogeneity and
+  dynamicity of clouds at scale: Google trace analysis,'' in \emph{Proc.\ ACM Symposium on Cloud Computing
+  (SoCC)}, 2012.
+\bibitem{tirmazi2020} M.~Tirmazi, A.~Barker, N.~Deng, M.~E. Haque, Z.~G. Qin, S.~Hand, M.~Harchol-Balter, and
+  J.~Wilkes, ``Borg: the next generation,'' in \emph{Proc.\ EuroSys}, 2020.
+\bibitem{gneiting2007} T.~Gneiting, F.~Balabdaoui, and A.~E. Raftery, ``Probabilistic forecasts, calibration
+  and sharpness,'' \emph{Journal of the Royal Statistical Society: Series B}, vol.~69, no.~2, pp.~243--268, 2007.
+\bibitem{harris2020} C.~R. Harris \emph{et al.}, ``Array programming with NumPy,'' \emph{Nature}, vol.~585,
+  pp.~357--362, 2020.
+\bibitem{nginx} nginx, ``Smooth weighted round-robin balancing,'' source file
+  \code{src/http/ngx\_http\_upstream\_round\_robin.c}, \url{https://github.com/nginx/nginx}.
+\bibitem{k8sframework} Kubernetes Documentation, ``Scheduling Framework,''
+  \url{https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/}.
+\end{thebibliography}
+
+% ============================================================== appendix
+\appendix
+
+\chapter{Parameters}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+Parameter & Value & Note\\
+\midrule
+Servers & 5 (Table~\ref{tab:servers}) & heterogeneous\\
+Window $W$ & 10 samples & population std\\
+$\theta_C$, $\theta_M$ & 80\%, 85\% & on the load signal\\
+$L$ weights (CPU, mem, resp) & 0.4, 0.4, 0.2 & \\
+$S$ weights (load, risk) & 0.6, 0.4 & \\
+Admission level & 0.5 & \\
+$R_{\mathrm{ref}}$ & 6\,s & mean task work\\
+$R_{\mathrm{SLA}}$ & 18\,s & $3\times$ mean work, frozen\\
+Tick, horizon & 1\,s; arrivals for 1000\,s, then drain & \\
+Task CPU, memory & $U(0.5,1.5)$ cores, $U(0.5,3)$\,GB & \\
+Task work & lognormal, mean 6\,s, $\sigma=0.6$, $\ge 1$\,s & \\
+Arrivals & Poisson, $\lambda_0 \approx 4$/s, $\pm20\%$ drift (period 500\,s) & $\approx 65\%$ load\\
+Bursts & 4 $\times$ 50\,s, $3\times$ arrivals, $1.3\times$ CPU & mean load matched\\
+Seeds & 0--4 & \\
+\bottomrule
+\end{tabular}
+\caption{Frozen parameters.}
+\end{table}
+
+\chapter{Reproducing the Results}
+The code, decision log and figures are at \repourl. With Python $\ge 3.11$:
+\begin{verbatim}
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+python -m pytest -q                # 156 tests
+python -m experiments.run_all      # 70 runs, about 30 s
+python -m experiments.sensitivity  # 44 points, about 200 s
+python -m experiments.plots        # figures -> results/figures/
+\end{verbatim}
+
+\chapter{Summary of Design Decisions}
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{lY}
+\toprule
+ID & Decision\\
+\midrule
+D1 & Time-stepped simulator (1 tick = 1\,s) rather than discrete-event, for simplicity and an exact per-tick metric log.\\
+D2 & Normal CDF via \code{math.erf}, with no SciPy dependency.\\
+D3 & Strategy pattern: every policy implements one interface and only reads server state.\\
+D4 & Drain the queue at the end of a run, so the slowest tasks are not dropped.\\
+D5--D6 & Population std; $\sigma=0$ handled by a deterministic rule ($\mu = \theta$ counts as not exceeding).\\
+D9 & Bursty and stable workloads have matched mean offered load.\\
+D10 & $R_{\mathrm{ref}} = 6$\,s, $R_{\mathrm{SLA}} = 18$\,s, fixed before results.\\
+D11 & Reservation-based server with a strict FIFO local queue.\\
+D13 & Tick order dispatch $\rightarrow$ sample $\rightarrow$ step.\\
+D16 & Policies read live load, so placements within a tick are visible and herding is avoided.\\
+D17 & Smooth (nginx) weighted round robin.\\
+D18--D19 & Utilisation hides backlog; the balancer observes load including queued demand.\\
+D20 & $\prisk$ from the window, $L_i$ from live state.\\
+D22 & Interval metrics over the arrival horizon; task metrics over completions.\\
+D23 & Paired differences with win counts instead of confidence intervals.\\
+D26 & Sensitivity: one axis at a time plus a $\theta \times$ admission grid, ablation rerun at every point, fixed yardstick.\\
+D28 & Curated figures versioned in \code{docs/figures/}; generated results not versioned.\\
+\bottomrule
+\end{tabularx}
+\caption{Key design decisions (full log in \code{docs/decisions.md}).}
+\end{table}
+
+\end{document}

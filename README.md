@@ -1,87 +1,72 @@
-# Uncertainty-Aware Probabilistic Load Balancing
+# Completion-Time-Aware Load Balancing
 
-**Repository:** https://github.com/Abhay0912/uncertainty-aware-load-balancer
+**Repository:** [https://github.com/Abhay0912/uncertainty-aware-load-balancer](https://github.com/Abhay0912/uncertainty-aware-load-balancer)
 
-M.Tech Cloud Computing project, NIT Warangal (2026). A discrete-time Python simulation compares a load balancer
-that scores servers by **estimated overload probability** (from the rolling mean *and variance* of recent
-metrics) against six baselines, under stable and bursty workloads.
+M.Tech Cloud Computing project, NIT Warangal (2026). A discrete-time Python simulation compares a load balancer that predicts each task's **completion time** on every feasible server against six conventional baselines, under stable and bursty workloads.
 
-> **Research question:** can recent server metrics *and their variability* be used to estimate overload risk and
-> improve task assignment compared with simple load-balancing policies?
+> **Research question:** can task-specific completion-time prediction improve placement compared with blind, capacity-aware, and load-aware policies?
 
 ## Headline result
 
-- **Load-awareness matters a lot.** Policies that ignore server state (Round Robin, Random) send work to a slow
-  server that builds a hidden backlog. Their mean response is about 850 s, against about 6 s for the load-aware
-  policies.
-- **The uncertainty term does not help here.** The probabilistic policy is compared, paired by seed, against
-  `weighted_metric`, which is the same policy *minus the risk term*. It is slightly worse on stable
-  (+0.29 s, 0/5 seeds won). On bursty there is no detectable difference (+0.18 s ± 0.85 s).
-- **Why:** a good balancer equalises load, so during bursts every server is far above the threshold at the same
-  time. P_risk is then close to 1 everywhere and carries no information for *ranking* servers. The risk estimate
-  is well calibrated (predicted 0.74 vs observed 0.72 on bursty) but it does not discriminate between servers.
-- **Robust:** a pre-declared sensitivity sweep over θ, the admission threshold, the risk weight and the window W
-  finds no setting where the risk term consistently helps.
+- **Stable workload:** ECT-only achieves the lowest p95 response time (14.21 s), lowest SLA violation rate (1.6%), and highest throughput (4.329 tasks/s) in the matched five-seed evaluation.
 
-The full analysis is in [docs/results.md](docs/results.md).
+- **Bursty workload:** ECT-only achieves the lowest mean response time (30.79 s) and p95 (67.41 s). Uncertainty-aware ECT has slightly higher throughput, but also higher mean latency and SLA violations.
 
-### Results (mean ± std over 5 seeds, R_SLA = 18 s)
+- **Important qualification:** bursts temporarily offer more work than the cluster can process. Placement can reduce avoidable delay, but cannot eliminate all queueing during overload.
+
+- **Conclusion:** completion-time prediction is promising in this simulator, but the results do not establish universal superiority or production readiness.
+
+The full analysis is in [docs/results.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/results.md).
+
+### Results (means over 5 seeds, 1,000 matched tasks per trace, SLA = 18 s)
 
 | Policy | Stable: mean resp (s) | Stable: SLA viol. | Bursty: mean resp (s) | Bursty: SLA viol. | Bursty: throughput (tasks/s) |
-|---|---|---|---|---|---|
-| Round Robin | 857 ± 30 | 59.2% | 821 ± 25 | 60.0% | 0.46 |
-| Random | 847 ± 40 | 58.7% | 823 ± 35 | 59.2% | 0.46 |
-| Weighted RR | 9.1 ± 1.7 | 7.4% | 30.9 ± 5.2 | 57.8% | 3.20 |
-| Power of Two Choices | 24.8 ± 4.2 | 28.2% | 46.4 ± 7.3 | 58.2% | 2.76 |
-| Least CPU | 6.16 ± 0.61 | 2.9% | 29.2 ± 4.8 | 54.1% | 3.43 |
-| Weighted metric (ablation) | **6.15 ± 0.62** | **2.7%** | 29.3 ± 4.9 | **53.5%** | 3.41 |
-| **Probabilistic (proposed)** | 6.44 ± 0.74 | 3.4% | 29.5 ± 5.2 | 53.9% | 3.41 |
+| - | - | - | - | - | - |
+| Round Robin | 231.27 | 56.6% | 256.44 | 56.6% | 0.455 |
+| Random | 243.82 | 57.3% | 273.73 | 56.8% | 0.440 |
+| Weighted RR | 8.77 | 8.9% | 32.85 | 64.3% | 3.260 |
+| Power of Two Choices | 15.64 | 24.2% | 37.53 | 58.7% | 2.097 |
+| Least CPU | 6.99 | 3.9% | 32.70 | 61.5% | 2.609 |
+| Weighted Metric | 7.11 | 3.7% | 32.87 | 60.9% | 2.830 |
+| **ECT-only (proposed)** | **7.70** | **1.6%** | **30.79** | 62.5% | **3.607** |
+| Uncertainty ECT | 9.15 | 3.0% | 31.59 | 63.2% | **3.628** |
 
-Under bursts, every policy violates the SLA for over half of all tasks. Offered load reaches about 160% of
-capacity during a burst, so no placement rule can avoid queueing.
 
-![Policy comparison](docs/figures/fig1_policy_comparison.png)
-*Fig 1. Mean response time (log scale) and SLA violation rate for every policy.*
-
-![Paired differences](docs/figures/fig2_paired_by_seed.png)
-*Fig 2. Probabilistic − weighted_metric for each seed. Below 0 means the risk term helped. The dots straddle 0.*
-
-![Load time series](docs/figures/fig4_load_timeseries.png)
-*Fig 4. Bursty workload, seed 0. During bursts (shaded), all five servers rise together to 10–20× capacity, far
-above θ = 80%, so a per-server risk score has nothing to rank.*
+Under bursts, every policy violates the SLA for over half of all tasks. Offered work temporarily exceeds capacity, so no placement rule can avoid queueing entirely.
 
 ## How the proposed policy works
 
-For each incoming task and each server i, over the last W = 10 samples:
+For each incoming task, the scheduler builds a temporary FIFO projection for each server:
 
 ```
-P_C = 1 − Φ((θ_C − μ_C) / σ_C)          θ_C = 80%,  θ_M = 85%   (σ = 0 → deterministic check)
-P_risk = 1 − (1 − P_C)(1 − P_M)         CPU and memory assumed independent
-L_i = 0.4·C/100 + 0.4·M/100 + 0.2·r     current load (C, M = load %, r = normalised response time)
-S_i = 0.6·L_i + 0.4·P_risk              pick the lowest S_i among servers with P_risk ≤ 0.5
-                                        (if none qualify, pick from all and log "capacity pressure")
+predicted work = public duration hint, class history, pooled history, or global prior
+predicted finish = shadow-queue start time + predicted work / server speed
+ECT = predicted finish − task arrival time
 ```
 
-`weighted_metric` is exactly this with the risk term removed. A test proves that setting the weights to (1, 0)
-and turning admission off reproduces it decision for decision.
+ECT-only chooses the feasible server with the lowest predicted completion time. The projection preserves running tasks, FIFO queue order, resource reservations, head-of-line blocking, and simulator tick timing. The practical policy receives immutable scheduler-visible state; hidden actual work and exact remaining work are not exposed.
+
+Uncertainty-aware ECT adds a tail-risk premium to the predicted mean. It remains available as an ablation, but ECT-only is the primary proposed approach because it performed better on latency in this evaluation.
 
 ## Experimental setup
 
 - **5 heterogeneous servers**, from (2 cores, speed 0.5) up to (8 cores, speed 2.0).
-- **Synthetic tasks** with CPU and memory demands and lognormal work. Poisson arrivals for 1000 s at about 65%
-  mean load, then the queue is drained until every task finishes.
-- **Two workloads with the same mean load:** stable (gentle sinusoidal drift) and bursty (4 bursts with 3× the
-  arrival rate).
-- **Fair comparison:** each (workload, seed) task list is generated once and given unchanged to all 7 policies.
-  Servers are rebuilt for every run, and randomised policies draw from their own seeded RNG streams.
-- **Pre-declared parameters:** θ, the weights, W and R_SLA were fixed before any results were seen, and stayed fixed.
-- 7 policies × 2 workloads × 5 seeds = 70 runs (about 30 s). The sensitivity sweep covers 44 points (about 200 s).
+
+- **Synthetic tasks** with CPU and memory demands and lognormal work. Poisson arrivals for 1000 s at about 65% mean load, then the queue is drained until every task finishes.
+
+- **Two workloads with the same mean load:** stable (gentle sinusoidal drift) and bursty (four bursts with 3× the arrival rate).
+
+- **Fair comparison:** each (workload, seed) task list is generated once and given unchanged to all compared policies. Servers are rebuilt for every run, and randomised policies draw from their own seeded RNG streams.
+
+- **Pre-declared parameters:** mean work is 6 s, the SLA is 18 s (3× nominal work), target utilisation is 65%, and the uncertainty penalty is beta = 0.5. These were fixed before inspecting the final results.
+
+- The reported comparison contains 8 policies (six baselines plus ECT-only and Uncertainty ECT) × 2 workloads × 5 seeds. The comparison uses the same traces and a 1,000-task cap per trace. The runner also retains the original probabilistic policy for historical experiments.
 
 ## Running it
 
 Requires Python ≥ 3.11.
 
-```powershell
+```
 git clone https://github.com/Abhay0912/uncertainty-aware-load-balancer.git
 cd uncertainty-aware-load-balancer
 python -m venv .venv
@@ -89,14 +74,16 @@ python -m venv .venv
 pip install -r requirements.txt
 pip install -e .
 
-python -m pytest -q                   # 156 tests
-python -m experiments.run_all         # main matrix   -> results/runs.csv, summary.csv, paired.csv
-python -m experiments.sensitivity     # sweep, ~200 s -> results/sensitivity.csv
+python -m pytest -q                   # test suite
+python -m experiments.run_v2 --limit 1000
+                                       # matched baselines + ECT -> results/v2_*.csv
+python -m experiments.run_all --limit 1000
+                                       # original policy pipeline
+python -m experiments.sensitivity     # original sensitivity sweep
 python -m experiments.plots           # figures       -> results/figures/
 ```
 
-`results/` is regenerated on every run and is not versioned. The figures in `docs/figures/` are the committed
-snapshot that the write-up refers to.
+`results/` is regenerated on every run and is not versioned. The figures in `docs/figures/` are the committed snapshot that the write-up refers to.
 
 ## Repository layout
 
@@ -106,8 +93,11 @@ src/lbsim/
   workload.py        seeded stable/bursty task generation
   server.py          capacity, running tasks, FIFO queue, utilisation and load signals
   metric_window.py   rolling window (mean, population std)
-  scoring.py         pure formulas: L_i, Φ, P_C/P_M, P_risk, S_i
+  scoring.py          original load/risk formulas and baseline scoring
   simulator.py       time-stepped loop shared by every policy
+  scheduling_view.py  immutable scheduler-visible state
+  estimators/         task-duration estimation
+  forecasting/        FIFO/resource-aware shadow projection
   evaluation.py      metrics, seed aggregation, paired comparison
   sensitivity.py     sweep definition and paired sweep runner
   policies/          one file per policy, all subclassing Policy
@@ -119,17 +109,20 @@ docs/                spec, architecture, decision log, results, interview notes,
 ## Documentation
 
 | File | Contents |
-|---|---|
-| [docs/results.md](docs/results.md) | Full results write-up: setup, findings, sensitivity, threats to validity |
-| [docs/spec.md](docs/spec.md) | Specification: formulas, baselines, metrics, parameters |
-| [docs/architecture.md](docs/architecture.md) | Data flow, module responsibilities, policy contract |
-| [docs/decisions.md](docs/decisions.md) | Decision log (D1–D28), with alternatives and reasons |
-| [docs/interview_notes.md](docs/interview_notes.md) | Pitch, notes for each phase, question bank |
-| [report/main.tex](report/main.tex) | Final project report (LaTeX). [Open in Overleaf](https://www.overleaf.com/docs?snip_uri=https://raw.githubusercontent.com/Abhay0912/uncertainty-aware-load-balancer/master/report/overleaf_report.zip) |
-| [presentation/uncertainty_aware_lb.pptx](presentation/uncertainty_aware_lb.pptx) | 17-slide presentation with speaker notes (generated by `presentation/build_deck.py`) |
+| - | - |
+| [docs/executive\_summary.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/executive_summary.md) | Component definitions, constants rationale, results, and conclusions |
+| [docs/evaluation\_metrics\_v1\_v2.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/evaluation_metrics_v1_v2.md) | Compiled matched evaluation metrics |
+| [docs/results.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/results.md) | Original results write-up, sensitivity, and threats to validity |
+| [docs/spec.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/spec.md) | Specification: formulas, baselines, metrics, parameters |
+| [docs/architecture.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/architecture.md) | Data flow, module responsibilities, policy contract |
+| [docs/decisions.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/decisions.md) | Decision log (D1–D28), with alternatives and reasons |
+| [docs/interview\_notes.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/interview_notes.md) | Pitch, notes for each phase, question bank |
+| [report/main.tex](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/report/main.tex) | Final project report (LaTeX). [Open in Overleaf](https://www.overleaf.com/docs?snip_uri=https://raw.githubusercontent.com/Abhay0912/uncertainty-aware-load-balancer/master/report/overleaf_report.zip) |
+| [docs/presentation\_slide\_explanations.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/presentation_slide_explanations.md) | Plain-language explanation of each presentation slide |
+| [presentation/uncertainty\_aware\_lb.pptx](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/presentation/uncertainty_aware_lb.pptx) | Completion-time-focused presentation |
+
 
 ## Limitations
 
-The workloads are synthetic. The normal approximation is applied to a skewed, autocorrelated signal over only 10
-samples. CPU and memory are assumed independent. Risk comes from past observations, not from the predicted state
-after an assignment. The weights were set by hand. See [docs/results.md](docs/results.md#threats-to-validity).
+The workloads are synthetic and the matched evaluation is bounded to five seeds and 1,000 tasks per trace. Duration estimates can be noisy, and the simulator uses simplified FIFO reservations, one-second ticks, and static server speeds. ECT has not been evaluated here with stale telemetry, server-specific background load, or a larger held-out seed set. See [docs/executive\_summary.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/executive_summary.md) and [docs/results.md](file:///home/crankshaft/Projects/uncertainty-aware-load-balancer/docs/results.md#threats-to-validity).
+

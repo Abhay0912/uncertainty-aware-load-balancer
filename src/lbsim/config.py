@@ -37,6 +37,7 @@ class WorkloadConfig:
     work_mean: float = 6.0
     work_sigma: float = 0.6
     work_min: float = 1.0
+    class_hint_noise: float = 0.15
 
     drift_amplitude: float = 0.2
     drift_period: int = 500
@@ -55,6 +56,8 @@ class WorkloadConfig:
             raise ValueError("demand bounds must satisfy 0 < low <= high")
         if not 0 < self.work_min < self.work_mean or self.work_sigma <= 0:
             raise ValueError("need 0 < work_min < work_mean and work_sigma > 0")
+        if self.class_hint_noise < 0:
+            raise ValueError("class_hint_noise must be >= 0")
         if not 0 <= self.drift_amplitude < 1:
             raise ValueError("drift_amplitude must be in [0, 1) so the rate stays positive")
         if self.n_bursts < 0 or self.burst_length <= 0:
@@ -136,6 +139,22 @@ class SimulationConfig:
             raise ValueError("max_ticks must be >= 1")
 
 
+@dataclass(frozen=True)
+class V2Config:
+    """Frozen first-pass V2 settings; tune only on validation seeds."""
+
+    beta: float = 0.5
+    projection_horizon: int = 100_000
+    history_size: int = 200
+    monte_carlo_samples: int = 0
+
+    def __post_init__(self) -> None:
+        if self.beta < 0 or self.projection_horizon < 1 or self.history_size < 1:
+            raise ValueError("invalid V2 configuration")
+        if self.monte_carlo_samples < 0:
+            raise ValueError("monte_carlo_samples must be >= 0")
+
+
 def validate_fit(servers: tuple[ServerSpec, ...], workload: WorkloadConfig) -> None:
     """Every task (including burst-inflated CPU) must fit on the smallest server."""
     if workload.cpu_high * workload.burst_cpu_mult > min(s.cores for s in servers):
@@ -160,5 +179,6 @@ SCORING = ScoringConfig(r_ref=WORKLOAD.work_mean)
 EXPERIMENT = ExperimentConfig(r_sla=3.0 * WORKLOAD.work_mean)
 SIMULATION = SimulationConfig()
 SENSITIVITY = SensitivityConfig()
+V2 = V2Config()
 
 validate_fit(SERVERS, WORKLOAD)

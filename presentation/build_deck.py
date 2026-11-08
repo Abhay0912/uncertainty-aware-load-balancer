@@ -1,729 +1,436 @@
-"""Build presentation/uncertainty_aware_lb.pptx with python-pptx.
+"""Build the project presentation.
 
-Usage (python-pptx and Pillow are not project dependencies):
-    pip install python-pptx Pillow
-    python presentation/build_deck.py .
+Usage:
+    .venv/bin/python presentation/build_deck.py .
 """
-import math
-import re
+
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
-from lxml import etree
-from PIL import Image
 from pptx import Presentation
-from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
-from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_MARKER_STYLE
-from pptx.enum.dml import MSO_LINE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
-from pptx.opc.constants import RELATIONSHIP_TYPE as RT
-from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
-REPO = Path(sys.argv[1])
+REPO = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 OUT = REPO / "presentation" / "uncertainty_aware_lb.pptx"
-FIG = REPO / "docs" / "figures"
-URL = "github.com/Abhay0912/uncertainty-aware-load-balancer"
 
-INK = "1B2A41"      # dominant: navy ink
-BLUE = "2B78D6"     # stable workload (matches figures)
-ORANGE = "E8643A"   # bursty workload / risk accent
+NAVY = "14253D"
+BLUE = "2B78D6"
+ORANGE = "E8643A"
+TEAL = "2E9E8F"
+INK = "1B2A41"
 MUTED = "5B6575"
-TINT = "EEF2F7"
+LIGHT = "EEF2F7"
 LINE = "D5DBE3"
 WHITE = "FFFFFF"
-HEAD, BODY = "Cambria", "Calibri"
-
+FONT = "Aptos"
+HEAD = "Aptos Display"
 W, H = 13.333, 7.5
 M = 0.6
 
-
-def rgb(h):
-    return RGBColor.from_string(h)
-
-
-# ---------------------------------------------------------------- theme
-def apply_theme(prs):
-    part = prs.slide_master.part.part_related_by(RT.THEME)
-    root = etree.fromstring(part.blob)
-    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
-    ns = {"a": a}
-    root.set("name", "Uncertainty LB")
-    for tag, face in (("majorFont", HEAD), ("minorFont", BODY)):
-        root.find(f".//a:{tag}/a:latin", ns).set("typeface", face)
-    colors = {"dk2": INK, "lt2": TINT, "accent1": BLUE, "accent2": ORANGE, "accent3": MUTED,
-              "accent4": "2E9E8F", "accent5": "8A6FD1", "accent6": "C9A227"}
-    scheme = root.find(".//a:clrScheme", ns)
-    for name, hexv in colors.items():
-        el = scheme.find(f"a:{name}", ns)
-        for child in list(el):
-            el.remove(child)
-        etree.SubElement(el, f"{{{a}}}srgbClr", val=hexv)
-    part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
-
-
-# ---------------------------------------------------------------- text helpers
-TOKEN = re.compile(r"(\*\*.+?\*\*|_\{.+?\})")
-
-
-def add_runs(p, text, size, color, bold=False, italic=False, font=BODY):
-    """`**bold**` and `_{subscript}` inline markup."""
-    for part in TOKEN.split(text):
-        if not part:
-            continue
-        r = p.add_run()
-        b, sub = bold, False
-        if part.startswith("**"):
-            part, b = part[2:-2], True
-        elif part.startswith("_{"):
-            part, sub = part[2:-1], True
-        r.text = part
-        f = r.font
-        f.size, f.bold, f.italic, f.name = Pt(size), b, italic, font
-        f.color.rgb = rgb(color)
-        if sub:
-            r.font._rPr.set("baseline", "-25000")
-
-
-def set_bullet(p, color):
-    pPr = p._p.get_or_add_pPr()
-    pPr.set("marL", str(int(Inches(0.28))))
-    pPr.set("indent", str(int(-Inches(0.28))))
-    for tag in ("a:buClr", "a:buFont", "a:buChar", "a:buNone"):
-        for el in pPr.findall(qn(tag)):
-            pPr.remove(el)
-    clr = etree.SubElement(pPr, qn("a:buClr"))
-    etree.SubElement(clr, qn("a:srgbClr"), val=color)
-    etree.SubElement(pPr, qn("a:buFont"), typeface="Arial")
-    etree.SubElement(pPr, qn("a:buChar"), char="•")
-
-
-def text(slide, x, y, w, h, paras, size=16, color=INK, bold=False, align=PP_ALIGN.LEFT,
-         anchor=MSO_ANCHOR.TOP, bullets=False, font=BODY, space=6, italic=False, name=None):
-    tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
-    if name:
-        tb.name = name
-    tf = tb.text_frame
-    tf.word_wrap = True
-    tf.vertical_anchor = anchor
-    for side in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
-        setattr(tf, side, 0)
-    if isinstance(paras, str):
-        paras = [paras]
-    for i, para in enumerate(paras):
-        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-        p.alignment = align
-        p.space_after = Pt(space)
-        add_runs(p, para, size, color, bold=bold, italic=italic, font=font)
-        if bullets:
-            set_bullet(p, ORANGE)
-    return tb
-
-
-def box(slide, x, y, w, h, fill=TINT, shape=MSO_SHAPE.ROUNDED_RECTANGLE, line=None, name=None):
-    s = slide.shapes.add_shape(shape, Inches(x), Inches(y), Inches(w), Inches(h))
-    if shape == MSO_SHAPE.ROUNDED_RECTANGLE:
-        s.adjustments[0] = 0.08
-    s.fill.solid()
-    s.fill.fore_color.rgb = rgb(fill)
-    if line:
-        s.line.color.rgb = rgb(line)
-        s.line.width = Pt(1.25)
-    else:
-        s.line.fill.background()
-    s.shadow.inherit = False
-    if name:
-        s.name = name
-    return s
-
-
-def marker(slide, x, y, label, fill=ORANGE, d=0.5, size=16):
-    c = box(slide, x, y, d, d, fill=fill, shape=MSO_SHAPE.OVAL)
-    tf = c.text_frame
-    for side in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
-        setattr(tf, side, 0)
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    p = tf.paragraphs[0]
-    p.alignment = PP_ALIGN.CENTER
-    add_runs(p, label, size, WHITE, bold=True)
-    return c
-
-
-def stat(slide, x, y, w, value, label, color=ORANGE, vsize=48, lsize=14, lcolor=MUTED):
-    text(slide, x, y, w, 0.85, value, size=vsize, color=color, bold=True, font=HEAD)
-    text(slide, x, y + 0.9, w, 0.8, label, size=lsize, color=lcolor)
-
-
-def picture(slide, path, x, y, max_w, max_h, align="center"):
-    iw, ih = Image.open(path).size
-    scale = min(max_w / iw, max_h / ih)
-    w, h = iw * scale, ih * scale
-    px = x + (max_w - w) / 2 if align == "center" else x
-    pic = slide.shapes.add_picture(str(path), Inches(px), Inches(y), Inches(w), Inches(h))
-    return pic, w, h
-
-
-# ---------------------------------------------------------------- slide frame
 prs = Presentation()
-prs.slide_width, prs.slide_height = Inches(W), Inches(H)
-apply_theme(prs)
-TITLE_ONLY = prs.slide_layouts[5]
-N_SLIDES = 17
-counter = {"n": 0}
+prs.slide_width = Inches(W)
+prs.slide_height = Inches(H)
+blank = prs.slide_layouts[6]
+slide_no = 0
 
 
-def new_slide(title, dark=False, notes=""):
-    s = prs.slides.add_slide(TITLE_ONLY)
-    counter["n"] += 1
-    bg = s.background.fill
-    bg.solid()
-    bg.fore_color.rgb = rgb(INK if dark else WHITE)
-    t = s.shapes.title
-    t.left, t.top, t.width, t.height = Inches(M), Inches(0.4), Inches(W - 2 * M), Inches(0.9)
-    tf = t.text_frame
+def color(value: str) -> RGBColor:
+    return RGBColor.from_string(value)
+
+
+def add_text(slide, x, y, w, h, value, size=16, fill=INK, bold=False,
+             align=PP_ALIGN.LEFT, font=FONT, italic=False):
+    shape = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+    tf = shape.text_frame
+    tf.clear()
     tf.word_wrap = True
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    for side in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
-        setattr(tf, side, 0)
-    p = tf.paragraphs[0]
-    p.alignment = PP_ALIGN.LEFT
-    add_runs(p, title, 34, WHITE if dark else INK, bold=True, font=HEAD)
-    if counter["n"] > 1:
-        text(s, W - M - 1.0, H - 0.45, 1.0, 0.3, f"{counter['n']} / {N_SLIDES}", size=11,
-             color="AEB7C4" if dark else MUTED, align=PP_ALIGN.RIGHT, name="Slide number")
+    tf.vertical_anchor = MSO_ANCHOR.TOP
+    for margin in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
+        setattr(tf, margin, 0)
+    lines = value if isinstance(value, list) else [value]
+    for i, line in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = line
+        p.alignment = align
+        p.space_after = Pt(5)
+        for run in p.runs:
+            run.font.name = font
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.italic = italic
+            run.font.color.rgb = color(fill)
+    return shape
+
+
+def rect(slide, x, y, w, h, fill=LIGHT, line=None, radius=True):
+    kind = MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE
+    shape = slide.shapes.add_shape(kind, Inches(x), Inches(y), Inches(w), Inches(h))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = color(fill)
+    if line:
+        shape.line.color.rgb = color(line)
+        shape.line.width = Pt(1)
+    else:
+        shape.line.fill.background()
+    return shape
+
+
+def slide(title, dark=False, notes=""):
+    global slide_no
+    slide_no += 1
+    s = prs.slides.add_slide(blank)
+    s.background.fill.solid()
+    s.background.fill.fore_color.rgb = color(NAVY if dark else WHITE)
+    add_text(s, M, 0.42, 11.6, 0.55, title, 30, WHITE if dark else INK, True, font=HEAD)
+    if slide_no > 1:
+        add_text(s, 11.9, 7.12, 0.8, 0.2, f"{slide_no} / 15", 10,
+                 "AEB7C4" if dark else MUTED, align=PP_ALIGN.RIGHT)
     if notes:
         s.notes_slide.notes_text_frame.text = notes
     return s
 
 
-def style_chart(chart, legend=True):
-    chart.font.name = BODY
-    chart.font.size = Pt(12)
-    chart.font.color.rgb = rgb(MUTED)
-    chart.has_legend = legend
-    if legend:
-        chart.legend.position = XL_LEGEND_POSITION.TOP
-        chart.legend.include_in_layout = False
-        chart.legend.font.size = Pt(13)
-        chart.legend.font.color.rgb = rgb(INK)
-    va = chart.value_axis
-    va.has_major_gridlines = True
-    va.major_gridlines.format.line.color.rgb = rgb(LINE)
-    va.format.line.fill.background()
-    va.tick_labels.font.size = Pt(12)
-    va.tick_labels.font.color.rgb = rgb(MUTED)
-    ca = chart.category_axis
-    ca.format.line.color.rgb = rgb(LINE)
-    ca.tick_labels.font.size = Pt(12)
-    ca.tick_labels.font.color.rgb = rgb(INK)
-    ca.has_major_gridlines = False
+def bullet_list(s, x, y, w, items, size=17, fill=MUTED, gap=0.55):
+    for i, item in enumerate(items):
+        yy = y + i * gap
+        add_text(s, x, yy, 0.2, 0.25, "•", size, ORANGE, True)
+        add_text(s, x + 0.28, yy, w - 0.28, 0.42, item, size, fill)
 
 
-def axis_title(axis, label):
-    axis.has_title = True
-    tf = axis.axis_title.text_frame
-    tf.text = label
-    f = tf.paragraphs[0].runs[0].font
-    f.size, f.bold, f.name = Pt(12), False, BODY
-    f.color.rgb = rgb(MUTED)
+def stat(s, x, y, w, value, label, fill=ORANGE):
+    add_text(s, x, y, w, 0.55, value, 38, fill, True, font=HEAD)
+    add_text(s, x, y + 0.62, w, 0.5, label, 13, MUTED)
 
 
-def log_axis(axis):
-    scaling = axis._element.find(qn("c:scaling"))
-    lb = etree.SubElement(scaling, qn("c:logBase"), val="10")
-    scaling.remove(lb)
-    scaling.insert(0, lb)
+def bar_chart(s, x, y, w, h, labels, values, maximum, fill=BLUE, value_suffix=""):
+    row_h = h / len(labels)
+    for i, (label, value) in enumerate(zip(labels, values)):
+        yy = y + i * row_h
+        add_text(s, x, yy, 1.65, 0.28, label, 12, INK, True)
+        rect(s, x + 1.75, yy + 0.03, w - 2.3, 0.25, "E5EAF1", radius=False)
+        bw = max(0.03, (w - 2.3) * min(value / maximum, 1))
+        rect(s, x + 1.75, yy + 0.03, bw, 0.25, fill, radius=False)
+        add_text(s, x + w - 0.5, yy - 0.01, 0.5, 0.3,
+                 f"{value:g}{value_suffix}", 11, INK, True, align=PP_ALIGN.RIGHT)
 
 
-def color_series(chart, colors):
-    for series, c in zip(chart.plots[0].series, colors):
-        series.format.fill.solid()
-        series.format.fill.fore_color.rgb = rgb(c)
+def metric_table(s, x, y, widths, headers, rows, row_h=0.42, font_size=11):
+    xx = x
+    for head, width in zip(headers, widths):
+        rect(s, xx, y, width, row_h, NAVY, radius=False)
+        add_text(s, xx + 0.06, y + 0.08, width - 0.12, 0.25, head, font_size, WHITE, True)
+        xx += width
+    for r, row in enumerate(rows):
+        xx = x
+        fill = WHITE if r % 2 == 0 else LIGHT
+        for value, width in zip(row, widths):
+            rect(s, xx, y + row_h * (r + 1), width, row_h, fill, LINE, radius=False)
+            add_text(s, xx + 0.06, y + row_h * (r + 1) + 0.08, width - 0.12,
+                     0.25, str(value), font_size, INK, value == row[0])
+            xx += width
 
 
-POLICIES = ["Round Robin", "Random", "Weighted RR", "P2C", "Least CPU", "Weighted metric", "Probabilistic"]
+# 1 ---------------------------------------------------------------------------
+s = slide("Uncertainty-Aware Predictive Task Placement", dark=True, notes=(
+    "This presentation focuses on practical task-aware completion-time prediction. "
+    "The method is evaluated against conventional load-balancing baselines."))
+add_text(s, M, 2.0, 11.5, 0.9, "From server-level overload scores to task-specific completion forecasts",
+         27, WHITE, True, font=HEAD)
+add_text(s, M, 3.2, 10.5, 0.5, "A seeded simulation study of heterogeneous cloud servers", 19, "CBD5E1")
+rect(s, M, 4.65, 5.3, 1.0, "203650")
+add_text(s, M + 0.3, 4.88, 4.7, 0.45, "ECT-only is the primary policy", 20, WHITE, True)
+add_text(s, M + 0.3, 5.35, 4.7, 0.25, "Uncertainty-aware ECT is the ablation", 14, "CBD5E1")
+add_text(s, M, 6.55, 9.5, 0.35, "Abhay Nagesh Rao  ·  M.Tech (CSE), Cloud Computing  ·  NIT Warangal",
+         14, "CBD5E1")
 
-# ================================================================ 1 title
-s = new_slide("Uncertainty-Aware Probabilistic Load Balancing", dark=True, notes=(
-    "Introduce the project: an M.Tech Cloud Computing project. The question is whether the variability of "
-    "recent server metrics, not just their current value, can predict overload and improve placement. "
-    "Spoiler for the audience: the honest answer is 'not in this setting', and the talk explains why."))
-s.shapes.title.top = Inches(2.0)
-s.shapes.title.height = Inches(1.3)
-text(s, M, 3.35, 11.5, 0.6, "Estimating overload risk from metric variability: a simulation study against six baselines",
-     size=20, color="CBD5E1")
-marker(s, M, 4.55, "", d=0.22)
-text(s, M + 0.4, 4.45, 9, 0.45, "**Abhay Nagesh Rao**  ·  M.Tech (CSE), Cloud Computing", size=18, color=WHITE)
-text(s, M + 0.4, 4.95, 9, 0.45, "National Institute of Technology Warangal  ·  November 2026", size=16, color="CBD5E1")
-text(s, M + 0.4, 5.45, 9, 0.45, URL, size=14, color="9FB3CC")
+# 2 ---------------------------------------------------------------------------
+s = slide("Why task-aware placement?", notes=(
+    "A server-level score treats every incoming task alike. But a short memory-heavy task and a long CPU-heavy "
+    "task can have different best servers even when aggregate load is similar. ECT answers the task-specific question."))
+rect(s, M, 1.55, 5.7, 4.55, LIGHT)
+add_text(s, M + 0.35, 1.85, 5.0, 0.4, "Aggregate load scoring", 21, INK, True, font=HEAD)
+add_text(s, M + 0.35, 2.45, 4.9, 0.65, "Which server has the lowest current CPU, memory and response-time score?",
+         18, MUTED)
+for i, line in enumerate(["Task-independent", "Backward-looking", "Risk may be equal across servers"]):
+    add_text(s, M + 0.35, 3.55 + i * 0.55, 4.7, 0.35, "• " + line, 16, ORANGE)
+rect(s, 6.9, 1.55, 5.8, 4.55, NAVY)
+add_text(s, 7.25, 1.85, 5.1, 0.4, "Completion-time prediction", 21, WHITE, True, font=HEAD)
+add_text(s, 7.25, 2.45, 5.0, 0.65, "On which feasible server will this particular task finish soonest?",
+         18, "CBD5E1")
+for i, line in enumerate(["Task-specific", "Includes FIFO wait and resource fit", "Uses public duration estimates"]):
+    add_text(s, 7.25, 3.55 + i * 0.55, 5.0, 0.35, "• " + line, 16, "F4A582")
+add_text(s, M, 6.45, 11.8, 0.4, "ECT does not know the exact future finish time; it predicts it from scheduler-visible information.",
+         16, MUTED, italic=True)
 
-# ================================================================ 2 motivation
-s = new_slide("Same 60% CPU, very different risk", notes=(
-    "Both servers average exactly 60% over the last 10 samples. A least-loaded balancer sees the same number. "
-    "But the volatile one regularly crosses the 80% threshold. Under a normal approximation, the steady server "
-    "has zero exceedance probability while the volatile one has about one in five. That gap is the idea this "
-    "project tests."))
-steady = [60.0] * 10
-volatile = [32, 88, 45, 90, 30, 75, 28, 85, 47, 80]
-mu = sum(volatile) / 10
-sd = math.sqrt(sum((v - mu) ** 2 for v in volatile) / 10)
-p_vol = 1 - 0.5 * (1 + math.erf(((80 - mu) / sd) / math.sqrt(2)))
-cd = CategoryChartData()
-cd.categories = [str(i) for i in range(1, 11)]
-cd.add_series("Steady server", steady)
-cd.add_series("Volatile server", volatile)
-cd.add_series("Threshold θ = 80%", [80] * 10)
-gf = s.shapes.add_chart(XL_CHART_TYPE.LINE_MARKERS, Inches(M), Inches(1.5), Inches(7.6), Inches(5.3), cd)
-ch = gf.chart
-style_chart(ch)
-ch.value_axis.minimum_scale, ch.value_axis.maximum_scale = 0, 100
-axis_title(ch.value_axis, "CPU %")
-axis_title(ch.category_axis, "Last 10 samples")
-for series, c, dash, mk in zip(ch.plots[0].series, [BLUE, ORANGE, MUTED],
-                               [None, None, MSO_LINE.DASH], [True, True, False]):
-    series.smooth = False
-    series.format.line.color.rgb = rgb(c)
-    series.format.line.width = Pt(2.75 if mk else 1.5)
-    if dash:
-        series.format.line.dash_style = dash
-    series.marker.style = XL_MARKER_STYLE.CIRCLE if mk else XL_MARKER_STYLE.NONE
-    if mk:
-        series.marker.size = 7
-        series.marker.format.fill.solid()
-        series.marker.format.fill.fore_color.rgb = rgb(c)
-        series.marker.format.line.color.rgb = rgb(c)
-cx = 8.65
-box(s, cx, 1.6, W - M - cx, 2.25)
-text(s, cx + 0.3, 1.8, 3.6, 0.4, "Steady server", size=16, color=BLUE, bold=True)
-text(s, cx + 0.3, 2.2, 3.6, 0.4, "μ = 60%,  σ = 0", size=15, color=MUTED)
-text(s, cx + 0.3, 2.65, 3.6, 0.9, "P(> 80%) = 0.00", size=30, color=INK, bold=True, font=HEAD)
-box(s, cx, 4.05, W - M - cx, 2.25)
-text(s, cx + 0.3, 4.25, 3.6, 0.4, "Volatile server", size=16, color=ORANGE, bold=True)
-text(s, cx + 0.3, 4.65, 3.6, 0.4, f"μ = {mu:.0f}%,  σ = {sd:.1f}", size=15, color=MUTED)
-text(s, cx + 0.3, 5.1, 3.6, 0.9, f"P(> 80%) = {p_vol:.2f}", size=30, color=INK, bold=True, font=HEAD)
-text(s, cx, 6.45, W - M - cx, 0.5, "A least-loaded rule sees the same 60% for both.", size=14, color=MUTED, italic=True)
-
-# ================================================================ 3 question
-s = new_slide("Research question", notes=(
-    "The primary outcome was written down before any experiment ran: fewer SLA violations and less overload "
-    "under bursty demand, without hurting throughput or response time. The scope is a simulation comparison, "
-    "not a production scheduler, and no improvement was assumed."))
-box(s, M, 1.55, W - 2 * M, 1.55, fill=INK)
-text(s, M + 0.45, 1.7, W - 2 * M - 0.9, 1.25,
-     "Can recent server metrics and their variability be used to estimate overload risk and improve task "
-     "assignment compared with simple load-balancing policies?",
-     size=22, color=WHITE, italic=True, font=HEAD, anchor=MSO_ANCHOR.MIDDLE)
-rows = [
-    ("1", "Primary outcome (fixed in advance)",
-     "Fewer SLA violations and less overload under **bursty** demand, without losing throughput or response time."),
-    ("2", "Decisive comparison",
-     "Against the same policy **without** the risk term, paired seed by seed."),
-    ("3", "Scope",
-     "A seeded simulation study with 5 heterogeneous servers. No improvement assumed; results reported as measured."),
+# 3 ---------------------------------------------------------------------------
+s = slide("Architecture: predict, then select", notes=(
+    "The practical policy receives immutable scheduler views. The duration estimator uses task classes, public "
+    "hints and completed-task history. The shadow queue projection is local and pure, so evaluating candidates "
+    "cannot mutate the real simulator. The uncertainty variant samples plausible service durations from history."))
+boxes = [
+    ("1", "Scheduler-visible state", "Task class / duration hint\nCPU, memory, queue, running work"),
+    ("2", "Duration estimator", "Class prior + completed service history\nNo hidden actual work"),
+    ("3", "Shadow FIFO projection", "Resource reservations\nHead-of-line blocking\nServer speed and tick order"),
+    ("4", "ECT objective", "Mean completion time\nOptional q90 tail premium"),
 ]
-for i, (n, head, body) in enumerate(rows):
-    y = 3.55 + i * 1.1
-    marker(s, M, y, n)
-    text(s, M + 0.8, y - 0.02, 4.0, 0.5, head, size=18, bold=True)
-    text(s, M + 4.9, y + 0.02, W - M - (M + 4.9), 0.9, body, size=16, color=MUTED)
+for i, (n, head, body) in enumerate(boxes):
+    x = M + i * 3.05
+    rect(s, x, 2.0, 2.65, 2.65, NAVY if i == 3 else LIGHT)
+    add_text(s, x + 0.25, 2.25, 0.4, 0.35, n, 18, ORANGE, True)
+    add_text(s, x + 0.25, 2.8, 2.15, 0.55, head, 18, WHITE if i == 3 else INK, True, font=HEAD)
+    add_text(s, x + 0.25, 3.65, 2.15, 0.8, body, 14, "CBD5E1" if i == 3 else MUTED)
+    if i < 3:
+        add_text(s, x + 2.72, 3.05, 0.3, 0.3, "→", 22, ORANGE, True, align=PP_ALIGN.CENTER)
+add_text(s, M, 5.45, 11.8, 0.6,
+         "Select argmin [ predicted mean + β × max(0, q90 − predicted mean) ]",
+         23, ORANGE, True, align=PP_ALIGN.CENTER, font=HEAD)
+add_text(s, M, 6.35, 11.8, 0.35, "β = 0 gives the ECT-only ablation; β > 0 gives uncertainty-aware ECT.",
+         15, MUTED, align=PP_ALIGN.CENTER)
 
-# ================================================================ 4 method
-s = new_slide("The proposed policy in five steps", notes=(
-    "Walk the pipeline left to right. Rolling mean and population standard deviation over 10 samples. "
-    "Normal CDF turns them into exceedance probabilities for CPU and memory. Combine assuming independence. "
-    "Score is 0.6 times current load plus 0.4 times risk. Filter out servers above 0.5 risk unless all are, "
-    "which is logged as capacity pressure. Key point: removing the risk term gives exactly the weighted-metric "
-    "baseline, and a test proves it decision for decision."))
+# 4 ---------------------------------------------------------------------------
+s = slide("The shadow queue matches the simulator", notes=(
+    "This is the correctness-critical component. The projection preserves FIFO order and head-of-line blocking. "
+    "A candidate that fits immediately starts in the current dispatch tick. Completed tasks release resources, "
+    "and queued tasks start at the next tick, exactly like the real server."))
 steps = [
-    ("Window", "Last W = 10 samples of CPU and memory load", "μ, σ (population)"),
-    ("Exceedance", ["Normal approximation", "θ_{C} = 80%,  θ_{M} = 85%"],
-     ["P_{C} = 1 − Φ(z_{C})", "z_{C} = (θ_{C} − μ_{C}) / σ_{C}"]),
-    ("Combine", "CPU and memory assumed independent", ["P_{risk} = 1 −", "(1 − P_{C})(1 − P_{M})"]),
-    ("Score", "L = weighted CPU, memory and response time", "S = 0.6 L + 0.4 P_{risk}"),
-    ("Admit", "Drop servers with P_{risk} > 0.5 unless all exceed it", "choose lowest S"),
+    ("Append", "Place the candidate after all existing FIFO work."),
+    ("Fit", "Start only the queue head when CPU and memory fit."),
+    ("Advance", "Reduce every running task by server speed for one tick."),
+    ("Release", "Finish tasks, release reservations, start queue at next tick."),
 ]
-cw, gap = 2.2, (W - 2 * M - 5 * 2.2) / 4
-for i, (head, desc, formula) in enumerate(steps):
-    x = M + i * (cw + gap)
-    box(s, x, 1.6, cw, 3.65)
-    marker(s, x + 0.25, 1.82, str(i + 1))
-    text(s, x + 0.25, 2.5, cw - 0.45, 0.45, head, size=19, bold=True, font=HEAD)
-    text(s, x + 0.25, 3.0, cw - 0.45, 1.1, desc, size=14, color=MUTED)
-    text(s, x + 0.25, 4.15, cw - 0.45, 1.0, formula, size=15, color=ORANGE, bold=True, space=2)
-    if i < 4:
-        a = s.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, Inches(x + cw + gap / 2 - 0.11), Inches(3.3),
-                               Inches(0.22), Inches(0.3))
-        a.fill.solid()
-        a.fill.fore_color.rgb = rgb(LINE)
-        a.line.fill.background()
-box(s, M, 5.55, W - 2 * M, 1.2, fill=WHITE, line=LINE)
-text(s, M + 0.35, 5.6, W - 2 * M - 0.7, 1.1,
-     "**The ablation.** With weights (1, 0) and no admission filter, the policy is exactly the "
-     "**weighted-metric** baseline, verified decision for decision by a unit test. Any difference "
-     "between the two comes from the risk term alone.", size=16, anchor=MSO_ANCHOR.MIDDLE)
+for i, (head, body) in enumerate(steps):
+    x = M + i * 3.05
+    rect(s, x, 1.9, 2.65, 2.35, LIGHT)
+    add_text(s, x + 0.25, 2.18, 2.1, 0.4, f"{i + 1}. {head}", 18, INK, True, font=HEAD)
+    add_text(s, x + 0.25, 2.85, 2.1, 0.85, body, 15, MUTED)
+    if i < 3:
+        add_text(s, x + 2.72, 2.75, 0.3, 0.3, "→", 22, ORANGE, True, align=PP_ALIGN.CENTER)
+rect(s, M, 4.9, 11.8, 1.2, NAVY)
+add_text(s, M + 0.35, 5.17, 11.1, 0.65,
+         "Tests cover immediate start, FIFO blocking, CPU/memory limits, concurrent tasks, simultaneous completion, "
+         "infeasibility and horizon exhaustion.",
+         16, WHITE, align=PP_ALIGN.CENTER)
 
-# ================================================================ 5 setup
-s = new_slide("A heterogeneous cluster, two matched workloads", notes=(
-    "Five servers with very different capacity. The fifth server is tiny: 2 cores at half speed, 1 of 37 "
-    "capacity units. Keep it in mind, because it breaks the load-blind policies. The two workloads have the "
-    "same mean load; only variability differs, so 'bursty is worse' cannot just mean 'more load'."))
-cd = CategoryChartData()
-cd.categories = ["S0\n4c × 1.0", "S1\n4c × 1.0", "S2\n8c × 1.5", "S3\n8c × 2.0", "S4\n2c × 0.5"]
-cd.add_series("Capacity (cores × speed)", [4, 4, 12, 16, 1])
-gf = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(M), Inches(1.5), Inches(6.3), Inches(5.3), cd)
-ch = gf.chart
-style_chart(ch, legend=False)
-ch.has_title = True
-ch.chart_title.text_frame.text = "Capacity per server (cores × speed)"
-tr = ch.chart_title.text_frame.paragraphs[0].runs[0].font
-tr.size, tr.bold, tr.name = Pt(15), True, BODY
-tr.color.rgb = rgb(INK)
-pl = ch.plots[0]
-pl.gap_width = 60
-pl.has_data_labels = True
-pl.data_labels.font.size = Pt(13)
-pl.data_labels.font.color.rgb = rgb(INK)
-pl.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
-ser = pl.series[0]
-ser.format.fill.solid()
-ser.format.fill.fore_color.rgb = rgb(BLUE)
-pt = ser.points[4]
-pt.format.fill.solid()
-pt.format.fill.fore_color.rgb = rgb(ORANGE)
-ch.value_axis.visible = False
-ch.value_axis.has_major_gridlines = False
-rx = 7.35
-rw = W - M - rx
-box(s, rx, 1.6, rw, 1.65)
-text(s, rx + 0.3, 1.75, rw - 0.6, 0.4, "Stable workload", size=17, bold=True, color=BLUE)
-text(s, rx + 0.3, 2.2, rw - 0.6, 1.0, "Poisson arrivals ≈ 4 tasks/s, ±20% slow drift, ≈ 65% mean load",
-     size=15, color=INK)
-box(s, rx, 3.45, rw, 1.65)
-text(s, rx + 0.3, 3.6, rw - 0.6, 0.4, "Bursty workload", size=17, bold=True, color=ORANGE)
-text(s, rx + 0.3, 4.05, rw - 0.6, 1.0, "4 bursts of 50 s at 3× arrivals; **same mean load**: "
-     "≈ 41% between bursts, ≈ 160% during", size=15, color=INK)
-text(s, rx, 5.35, rw, 1.4, [
-    "Tasks: CPU 0.5–1.5 cores, memory 0.5–3 GB, lognormal work (mean 6 s)",
-    "Reservation model with a FIFO queue per server; run arrivals for 1000 s, then drain",
-], size=14, color=MUTED, bullets=True)
+# 5 ---------------------------------------------------------------------------
+s = slide("Practical information contract", notes=(
+    "The simulator needs hidden actual work to execute tasks, but a deployable scheduler cannot see it. "
+    "The scheduler separates execution state from scheduling-visible state."))
+rect(s, M, 1.65, 5.65, 4.5, NAVY)
+add_text(s, M + 0.35, 1.95, 4.9, 0.4, "Scheduler may see", 21, WHITE, True, font=HEAD)
+bullet_list(s, M + 0.35, 2.65, 4.8, [
+    "CPU and memory demand",
+    "Task class or duration estimate",
+    "Server capacity and speed",
+    "Running reservations and FIFO queue",
+    "Completed-task history",
+], 16, "CBD5E1", 0.58)
+rect(s, 6.95, 1.65, 5.45, 4.5, LIGHT)
+add_text(s, 7.3, 1.95, 4.8, 0.4, "Scheduler must not see", 21, INK, True, font=HEAD)
+bullet_list(s, 7.3, 2.65, 4.7, [
+    "Actual generated task work",
+    "Exact remaining work",
+    "Future completion tick",
+    "Counterfactual outcomes",
+], 16, MUTED, 0.72)
+add_text(s, M, 6.5, 11.8, 0.35,
+         "Practical ECT is an estimate based on information available at dispatch time.",
+         15, ORANGE, True, align=PP_ALIGN.CENTER)
 
-# ================================================================ 6 fairness
-s = new_slide("Designed so the comparison is fair", notes=(
-    "Seventy runs in total. Fairness guarantees: one task list per workload and seed, shared by all policies; "
-    "fresh servers every run; parameters frozen before any result; paired comparison against the ablation "
-    "with win counts. 156 tests back this up, including edge cases like sigma equal to zero."))
-stat(s, M, 1.75, 3.6, "70 runs", "7 policies × 2 workloads × 5 seeds", vsize=54, lsize=16)
-stat(s, M, 3.6, 3.6, "156 tests", "σ = 0, all servers risky, determinism, ablation identity", color=BLUE,
-     vsize=54, lsize=16)
+# 6 ---------------------------------------------------------------------------
+s = slide("Matched experimental design", notes=(
+    "Both pipelines use the same five seeds, the same stable and bursty traces, and the same first 1,000 tasks "
+    "per trace for this compiled comparison. Each policy gets fresh servers and reset state."))
+stat(s, M, 1.7, 2.7, "5", "seeds: 0–4", BLUE)
+stat(s, 3.55, 1.7, 2.7, "2", "workloads", ORANGE)
+stat(s, 6.4, 1.7, 2.7, "1,000", "matched tasks / trace", TEAL)
+stat(s, 9.25, 1.7, 2.7, "18 s", "frozen SLA", INK)
 cards = [
-    ("Identical task stream", "Generated once per (workload, seed), passed unchanged to every policy"),
-    ("Fresh state", "Servers rebuilt and policies reset for every run; seeded RNG streams only"),
-    ("Frozen parameters", "θ, weights, W, admission and SLA = 18 s fixed before any result"),
-    ("Paired by seed", "Per-seed difference vs. the ablation; report mean, std and seeds won"),
+    ("Same trace", "Every policy sees the identical task sequence."),
+    ("Fresh state", "Servers and policy state reset for every run."),
+    ("Same baselines", "The method is compared with six conventional policies."),
+    ("Paired metrics", "Differences are computed seed by seed."),
 ]
-gx, gw, gh = 4.75, (W - M - 4.75 - 0.3) / 2, 2.35
 for i, (head, body) in enumerate(cards):
-    x = gx + (i % 2) * (gw + 0.3)
-    y = 1.6 + (i // 2) * (gh + 0.3)
-    box(s, x, y, gw, gh)
-    marker(s, x + 0.3, y + 0.3, "✓", fill=INK, size=15)
-    text(s, x + 0.3, y + 0.95, gw - 0.6, 0.45, head, size=18, bold=True)
-    text(s, x + 0.3, y + 1.45, gw - 0.6, 0.85, body, size=15, color=MUTED)
+    x = M + (i % 2) * 6.0
+    y = 3.35 + (i // 2) * 1.35
+    rect(s, x, y, 5.55, 1.05, LIGHT)
+    add_text(s, x + 0.25, y + 0.2, 2.0, 0.3, head, 17, INK, True)
+    add_text(s, x + 2.05, y + 0.2, 3.15, 0.6, body, 14, MUTED)
 
-# ================================================================ 7 policies
-s = new_slide("Seven policies, one interface", notes=(
-    "Static: Round Robin and Random ignore capacity and load. Weighted Round Robin knows capacity but not load. "
-    "Load-aware: Least CPU, Power of Two Choices and the weighted-metric score. The weighted metric is the "
-    "ablation. The proposed probabilistic policy is the one in orange."))
-pol = [
-    ("Round Robin", "Cyclic order", "load-blind"),
-    ("Random", "Uniform choice", "load-blind"),
-    ("Weighted RR", "Smooth WRR, weight = cores × speed", "capacity-aware"),
-    ("Least CPU", "Lowest live CPU load", "load-aware"),
-    ("Power of Two", "Sample 2, pick lower L", "load-aware"),
-    ("Weighted metric", "Lowest L, no risk term", "ablation"),
-    ("Probabilistic", "Lowest S among admissible servers", "proposed"),
+# 7 ---------------------------------------------------------------------------
+s = slide("Policies compared", notes=(
+    "The six conventional policies are unchanged. The method includes ECT-only and uncertainty-aware ECT. The key scientific "
+    "comparison is uncertainty-aware ECT versus ECT-only; comparing only against Weighted Metric would not isolate "
+    "the value of uncertainty."))
+policies = [
+    ("Round Robin", "Cyclic order", MUTED),
+    ("Random", "Uniform choice", MUTED),
+    ("Weighted RR", "Capacity weights", BLUE),
+    ("Least CPU", "Lowest CPU load", BLUE),
+    ("Weighted Metric", "CPU + memory + response", BLUE),
+    ("ECT-only", "Lowest predicted finish", TEAL),
+    ("Uncertainty ECT", "Mean + tail premium", NAVY),
 ]
-cw4 = (W - 2 * M - 3 * 0.3) / 4
-for i, (name, rule, tag) in enumerate(pol):
-    row, col = divmod(i, 4)
-    x = M + col * (cw4 + 0.3)
-    y = 1.65 + row * 2.6
-    hi = tag == "proposed"
-    box(s, x, y, cw4, 2.3, fill=ORANGE if hi else TINT, line=INK if tag == "ablation" else None)
-    text(s, x + 0.3, y + 0.3, cw4 - 0.6, 0.35, tag.upper(), size=12, bold=True,
-         color=WHITE if hi else (ORANGE if tag != "load-blind" else MUTED))
-    text(s, x + 0.3, y + 0.75, cw4 - 0.6, 0.5, name, size=20, bold=True, font=HEAD, color=WHITE if hi else INK)
-    text(s, x + 0.3, y + 1.35, cw4 - 0.6, 0.8, rule, size=15, color=WHITE if hi else MUTED)
-x = M + 3 * (cw4 + 0.3)
-text(s, x, 4.45, cw4, 2.0, "Every policy only **reads** server state. A contract test compares full server "
-     "state before and after each call.", size=14, color=MUTED)
-
-# ================================================================ 8 backlog
-s = new_slide("Finding 1: CPU % hid a 424-task backlog", notes=(
-    "During development every load-aware policy lost to load-blind weighted round robin. Cause: fragmentation. "
-    "The 2-core server had 424 queued tasks but showed only 62% CPU, because the next task could not fit beside "
-    "the running one. The fix changed what the balancer observes, not the formulas: load includes queued demand. "
-    "This is the same reason Linux load average counts waiting tasks."))
-box(s, M, 1.6, 4.1, 4.0)
-stat(s, M + 0.35, 1.85, 3.5, "424", "tasks queued on the 2-core server", vsize=60, lsize=16)
-stat(s, M + 0.35, 3.6, 3.5, "62%", "CPU it reported at the same moment", color=BLUE, vsize=60, lsize=16)
-a = s.shapes.add_shape(MSO_SHAPE.RIGHT_ARROW, Inches(M + 4.3), Inches(3.35), Inches(0.5), Inches(0.5))
-a.fill.solid()
-a.fill.fore_color.rgb = rgb(ORANGE)
-a.line.fill.background()
-fx = M + 5.0
-box(s, fx, 1.6, 3.4, 4.0, fill=INK)
-text(s, fx + 0.3, 1.85, 2.8, 0.4, "THE FIX", size=13, bold=True, color="F4A582")
-text(s, fx + 0.3, 2.3, 2.8, 1.6, "Observe **load %** = (running + queued demand) ÷ capacity", size=20,
-     color=WHITE, font=HEAD)
-text(s, fx + 0.3, 4.15, 2.8, 1.3, "Equal to utilisation when there is no queue; load-blind results "
-     "unchanged.", size=14, color="CBD5E1")
-ox = fx + 3.7
-text(s, ox, 1.65, W - M - ox, 0.4, "Stable mean response", size=15, bold=True, color=MUTED)
-for i, (name, before, after) in enumerate([("Least CPU", "907 s", "6.5 s"), ("Weighted metric", "236 s", "6.4 s")]):
-    y = 2.2 + i * 1.65
-    text(s, ox, y, W - M - ox, 0.4, name, size=17, bold=True)
-    text(s, ox, y + 0.45, 1.5, 0.7, before, size=26, color=MUTED, font=HEAD)
-    text(s, ox + 1.45, y + 0.45, 0.5, 0.7, "→", size=26, color=MUTED)
-    text(s, ox + 1.95, y + 0.45, 1.6, 0.7, after, size=26, color=ORANGE, bold=True, font=HEAD)
-text(s, M, 5.9, W - 2 * M, 0.8, "Lesson: what the balancer **observes** matters as much as the rule it applies.",
-     size=17, color=INK, italic=True)
-
-# ================================================================ 9 response chart
-s = new_slide("Load-awareness is worth about 100×", notes=(
-    "Log scale. Round Robin and Random are around 850 seconds because they give the tiny server one fifth of "
-    "the tasks. Every load-aware policy is near 6 seconds on stable. P2C is weaker with only five servers. "
-    "Probabilistic and weighted metric are almost identical, which is the next slide's topic."))
-resp = {"stable": [857.4, 846.7, 9.08, 24.8, 6.16, 6.15, 6.44],
-        "bursty": [821.4, 822.9, 30.9, 46.4, 29.2, 29.3, 29.5]}
-cd = CategoryChartData()
-cd.categories = POLICIES
-cd.add_series("Stable", resp["stable"])
-cd.add_series("Bursty", resp["bursty"])
-gf = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(M), Inches(1.45), Inches(8.6), Inches(5.4), cd)
-ch = gf.chart
-style_chart(ch)
-color_series(ch, [BLUE, ORANGE])
-log_axis(ch.value_axis)
-ch.value_axis.minimum_scale = 1
-ch.value_axis.maximum_scale = 1000
-ch.value_axis.tick_labels.number_format = "0"
-ch.value_axis.tick_labels.number_format_is_linked = False
-axis_title(ch.value_axis, "Mean response time (s, log scale)")
-pl = ch.plots[0]
-pl.gap_width, pl.overlap = 55, -5
-pl.has_data_labels = True
-pl.data_labels.number_format = "[<100]0.0;0"
-pl.data_labels.number_format_is_linked = False
-pl.data_labels.font.size = Pt(11)
-pl.data_labels.font.color.rgb = rgb(INK)
-pl.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
-cx = 9.55
-text(s, cx, 1.65, W - M - cx, 4.9, [
-    "**Round Robin and Random** send a fifth of all tasks to the server with 1/37 of the capacity: ≈ 850 s",
-    "**Load-aware policies** reach ≈ 6 s on stable",
-    "**P2C** is weak with 5 servers: a two-server sample misses the fastest server 60% of the time",
-], size=15, bullets=True, space=12)
-
-# ================================================================ 10 SLA chart
-s = new_slide("Bursts overwhelm every policy", notes=(
-    "SLA is 18 seconds, fixed before the experiments. On stable, the load-aware policies violate it for about "
-    "3% of tasks. Under bursts, every policy is above 50%, because a burst offers about 160% of cluster "
-    "capacity. No placement rule can avoid queueing then; the question is only how much each one reduces it."))
-sla = {"stable": [59.2, 58.7, 7.4, 28.2, 2.9, 2.7, 3.4], "bursty": [60.0, 59.2, 57.8, 58.2, 54.1, 53.5, 53.9]}
-cd = CategoryChartData()
-cd.categories = POLICIES
-cd.add_series("Stable", sla["stable"])
-cd.add_series("Bursty", sla["bursty"])
-gf = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(M), Inches(1.45), Inches(8.6), Inches(5.4), cd)
-ch = gf.chart
-style_chart(ch)
-color_series(ch, [BLUE, ORANGE])
-ch.value_axis.minimum_scale, ch.value_axis.maximum_scale = 0, 70
-ch.value_axis.tick_labels.number_format = '0"%"'
-ch.value_axis.tick_labels.number_format_is_linked = False
-axis_title(ch.value_axis, "SLA violations (response > 18 s)")
-pl = ch.plots[0]
-pl.gap_width, pl.overlap = 55, -5
-pl.has_data_labels = True
-pl.data_labels.number_format = '0"%"'
-pl.data_labels.number_format_is_linked = False
-pl.data_labels.font.size = Pt(11)
-pl.data_labels.font.color.rgb = rgb(INK)
-pl.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
-stat(s, cx, 1.7, W - M - cx, "≥ 53%", "SLA violations under bursts, for every policy", vsize=44, lsize=15)
-stat(s, cx, 3.35, W - M - cx, "≈ 160%", "offered load during a burst: queueing is unavoidable", color=BLUE,
-     vsize=44, lsize=15)
-text(s, cx, 5.05, W - M - cx, 1.5, "So the test is how much a policy **reduces** violations, not whether it "
-     "eliminates them.", size=15, color=MUTED)
-
-# ================================================================ 11 ablation
-s = new_slide("Finding 2: the risk term did not beat its ablation", notes=(
-    "Each dot is one seed: probabilistic minus weighted metric, below zero means the risk term helped. On "
-    "stable it is worse on all five seeds, small but consistent; a sign test gives p about 0.03. Under bursts "
-    "the dots straddle zero. The one favourable number, overload down 1.1 points, is smaller than its own "
-    "standard deviation. The primary outcome is not met."))
-pic, pw, ph = picture(s, FIG / "fig2_paired_by_seed.png", M, 1.4, W - 2 * M, 3.55)
-cy = 1.4 + ph + 0.3
-cwid = (W - 2 * M - 2 * 0.3) / 3
-items = [
-    ("Stable", "+0.29 s", "worse on 5 of 5 seeds", BLUE, TINT),
-    ("Bursty", "+0.18 ± 0.85 s", "inside seed noise (3/5 won)", ORANGE, TINT),
-    ("Verdict", "Not met", "primary outcome, frozen parameters", WHITE, INK),
-]
-for i, (lab, val, sub, c, fill) in enumerate(items):
-    x = M + i * (cwid + 0.3)
-    box(s, x, cy, cwid, H - 0.65 - cy, fill=fill)
-    dark = fill == INK
-    text(s, x + 0.3, cy + 0.15, cwid - 0.6, 0.35, lab.upper(), size=12, bold=True, color="F4A582" if dark else c)
-    text(s, x + 0.3, cy + 0.5, cwid - 0.6, 0.6, val, size=26, bold=True, font=HEAD, color=WHITE if dark else INK)
-    text(s, x + 0.3, cy + 1.1, cwid - 0.6, 0.4, sub, size=14, color="CBD5E1" if dark else MUTED)
-
-# ================================================================ 12 calibration
-s = new_slide("The risk estimate was well calibrated", notes=(
-    "So is the model broken? No. The predicted risk of the chosen server matches the observed frequency of "
-    "overload almost exactly: 0.62 versus 0.62 on stable, 0.74 versus 0.72 on bursty. The points sit on the "
-    "diagonal. The problem is elsewhere."))
-pic, pw, ph = picture(s, FIG / "fig3_calibration.png", M, 1.45, 5.9, 5.4, align="left")
-rx = M + pw + 0.6
-rw = W - M - rx
-text(s, rx, 1.7, rw, 0.4, "Predicted risk vs. observed overload frequency", size=15, color=MUTED, bold=True)
-for i, (lab, pred, obs, c) in enumerate([("Stable", "0.62", "0.62", BLUE), ("Bursty", "0.74", "0.72", ORANGE)]):
-    y = 2.3 + i * 1.6
-    box(s, rx, y, rw, 1.35)
-    text(s, rx + 0.3, y + 0.15, 1.6, 0.4, lab, size=17, bold=True, color=c)
-    text(s, rx + 0.3, y + 0.55, rw - 0.6, 0.7, f"{pred} predicted  ·  {obs} observed", size=24, bold=True,
-         font=HEAD)
-text(s, rx, 5.6, rw, 1.2, "The model is **not wrong**. Its predictions match reality on average. "
-     "So why didn't it help?", size=17, color=INK)
-
-# ================================================================ 13 not discriminative
-s = new_slide("...but it could not tell servers apart", notes=(
-    "This is the mechanism. A load-aware balancer equalises the servers, so their load curves move together. "
-    "During each burst all five reach 10 to 20 times capacity at once, far above the 80% line. Every server has "
-    "risk close to 1, the admission filter finds nobody eligible, and the score ranks exactly like the plain "
-    "load score. That happened in 57% of stable decisions and 73% of bursty ones. Calibrated, but not "
-    "discriminative."))
-iw, ih = Image.open(FIG / "fig4_load_timeseries.png").size
-pic, pw, ph = picture(s, FIG / "fig4_load_timeseries.png", M, 1.45 + (5.4 - 8.9 * ih / iw) / 2, 8.9, 5.4, align="left")
-rx = M + pw + 0.4
-rw = W - M - rx
-stat(s, rx, 1.6, rw, "73%", "of bursty decisions: every server had P_{risk} > 0.5 (57% on stable)", vsize=54,
-     lsize=15)
-text(s, rx, 3.45, rw, 3.3, [
-    "Balancing makes servers move **together**",
-    "Bursts push all five to 10–20× capacity at once",
-    "P_{risk} ≈ 1 everywhere, so S ranks exactly like L",
-], size=15, bullets=True, space=10)
-
-# ================================================================ 14 sensitivity
-s = new_slide("Robust: no setting rescues the risk term", notes=(
-    "Four axes were declared in advance and swept one at a time, plus a threshold-by-admission grid: 44 "
-    "points, each run on both workloads and five seeds, with the ablation rerun at every point and outcomes "
-    "always scored at the frozen thresholds. Raising theta cuts stable capacity pressure, but bursty pressure "
-    "stays near 70% whatever theta is. The only helpful settings weaken the risk machinery."))
-cd = CategoryChartData()
-cd.categories = ["60", "80", "100", "120", "150"]
-cd.add_series("Stable", [86.4, 57.3, 36.5, 24.3, 10.1])
-cd.add_series("Bursty", [79.9, 72.5, 70.5, 69.1, 66.8])
-gf = s.shapes.add_chart(XL_CHART_TYPE.LINE_MARKERS, Inches(M), Inches(1.45), Inches(5.9), Inches(5.0), cd)
-ch = gf.chart
-style_chart(ch)
-ch.value_axis.minimum_scale, ch.value_axis.maximum_scale = 0, 100
-ch.value_axis.tick_labels.number_format = '0"%"'
-ch.value_axis.tick_labels.number_format_is_linked = False
-axis_title(ch.value_axis, "Decisions under capacity pressure")
-axis_title(ch.category_axis, "CPU threshold θ on the load signal (%)")
-for series, c in zip(ch.plots[0].series, [BLUE, ORANGE]):
-    series.smooth = False
-    series.format.line.color.rgb = rgb(c)
-    series.format.line.width = Pt(2.75)
-    series.marker.style = XL_MARKER_STYLE.CIRCLE
-    series.marker.size = 8
-    series.marker.format.fill.solid()
-    series.marker.format.fill.fore_color.rgb = rgb(c)
-    series.marker.format.line.color.rgb = rgb(c)
-rx = 7.0
-rw = W - M - rx
-axes = [
-    ("Threshold θ", "Bursty pressure stays near 70% at every θ; Δ shows no trend"),
-    ("Admission filter", "Off is the only consistent gain (≈ 1%, 5/5 seeds)"),
-    ("Risk weight", "Stable gets steadily worse as the weight grows"),
-    ("Window W", "5 to 40 samples: changes stay inside the noise"),
-]
-for i, (head, body) in enumerate(axes):
-    y = 1.55 + i * 1.02
-    marker(s, rx, y + 0.05, str(i + 1), fill=INK, d=0.42, size=14)
-    text(s, rx + 0.65, y, rw - 0.65, 0.4, head, size=16, bold=True)
-    text(s, rx + 0.65, y + 0.38, rw - 0.65, 0.6, body, size=14, color=MUTED)
-box(s, rx, 5.75, rw, 1.0, fill=INK)
-text(s, rx + 0.3, 5.8, rw - 0.6, 0.9, "Every setting that helps **weakens** the risk machinery.", size=16,
-     color=WHITE, anchor=MSO_ANCHOR.MIDDLE)
-
-# ================================================================ 15 threats
-s = new_slide("Threats to validity", notes=(
-    "Be upfront about these. The normal approximation is applied to a skewed, autocorrelated signal over only "
-    "ten samples. Independence of CPU and memory overstates joint risk. Risk is computed from the past. The "
-    "workload is synthetic and bursts hit all servers equally. Five servers and five seeds cannot resolve 1% "
-    "effects. Weights were set by hand, though the sweep covers them."))
-threats = [
-    ("Normality", "Skewed, autocorrelated load signal, only W = 10 samples"),
-    ("Independence", "CPU and memory are coupled through the queue, so joint risk is overstated"),
-    ("Backward-looking", "Risk from past samples, not the state after placing the task"),
-    ("Synthetic workload", "Bursts hit every server equally; real traces are more varied"),
-    ("Scale", "5 servers and 5 seeds cannot resolve effects below ≈ 1%"),
-    ("Hand-set weights", "Swept one axis at a time, not jointly optimised"),
-]
-tw = (W - 2 * M - 2 * 0.3) / 3
-for i, (head, body) in enumerate(threats):
+for i, (name, rule, fill) in enumerate(policies):
     row, col = divmod(i, 3)
-    x = M + col * (tw + 0.3)
-    y = 1.6 + row * 2.6
-    box(s, x, y, tw, 2.3)
-    marker(s, x + 0.3, y + 0.3, "!", fill=ORANGE, d=0.45, size=16)
-    text(s, x + 0.3, y + 0.95, tw - 0.6, 0.45, head, size=18, bold=True)
-    text(s, x + 0.3, y + 1.45, tw - 0.6, 0.8, body, size=15, color=MUTED)
+    x = M + col * 4.1
+    y = 1.55 + row * 1.65
+    rect(s, x, y, 3.7, 1.25, fill)
+    add_text(s, x + 0.25, y + 0.23, 3.2, 0.3, name, 17, WHITE, True, font=HEAD)
+    add_text(s, x + 0.25, y + 0.7, 3.2, 0.3, rule, 13, "EAF0F6")
+add_text(s, M, 6.65, 11.8, 0.3, "All practical policies use the same scheduler-visible interface.", 15, MUTED,
+         align=PP_ALIGN.CENTER)
 
-# ================================================================ 16 conclusions
-s = new_slide("Conclusions and next steps", dark=True, notes=(
-    "Three takeaways: observe queued load; the risk term did not help here, robustly; and the reason is "
-    "calibration without discrimination. The work also predicts where variance should help: servers with "
-    "different volatility, stale metrics, and risk computed after the assignment. Those are the next experiments."))
-take = [
-    ("Observe queued load", "Including queued demand made load-aware policies ≈ 100× better than load-blind ones."),
-    ("Risk did not help here", "No gain over the ablation on either workload or at any swept setting."),
-    ("Calibrated ≠ useful", "A forecast that is right on average cannot rank options it rates equally."),
+# 8 ---------------------------------------------------------------------------
+s = slide("Stable workload: ECT reduces tail latency", notes=(
+    "These are means over five seeds and the first 1,000 tasks per trace. ECT-only has the lowest p95 and SLA "
+    "violation rate. Its mean response is close to Weighted Metric but throughput is higher. The uncertainty "
+    "penalty is worse than ECT-only on this workload."))
+labels = ["Round Robin", "Random", "Weighted RR", "P2C", "Least CPU", "Weighted Metric", "ECT-only", "Uncertainty"]
+bar_chart(s, M, 1.45, 7.0, 4.9, labels,
+          [231.3, 243.8, 8.8, 15.6, 7.0, 7.1, 7.7, 9.1], 260, BLUE, "s")
+rect(s, 8.2, 1.65, 4.5, 1.1, TEAL)
+add_text(s, 8.45, 1.9, 4.0, 0.35, "ECT-only p95: 14.21 s", 20, WHITE, True)
+add_text(s, 8.45, 2.35, 4.0, 0.25, "Best among compared policies", 13, "EAF0F6")
+rect(s, 8.2, 3.05, 4.5, 1.1, LIGHT)
+add_text(s, 8.45, 3.28, 4.0, 0.35, "ECT-only SLA: 1.6%", 20, INK, True)
+add_text(s, 8.45, 3.73, 4.0, 0.25, "Weighted Metric: 3.7%", 13, MUTED)
+rect(s, 8.2, 4.45, 4.5, 1.1, LIGHT)
+add_text(s, 8.45, 4.68, 4.0, 0.35, "ECT-only throughput: 4.329/s", 20, INK, True)
+add_text(s, 8.45, 5.13, 4.0, 0.25, "Weighted Metric: 3.809/s", 13, MUTED)
+
+# 9 ---------------------------------------------------------------------------
+s = slide("Bursty workload: ECT improves latency and throughput", notes=(
+    "Bursts create unavoidable overload, but ECT-only still has the best mean response and p95 among practical "
+    "policies in this matched run. SLA violations remain high because offered demand exceeds capacity."))
+bar_chart(s, M, 1.45, 7.0, 4.9, labels,
+          [256.4, 273.7, 32.9, 37.5, 32.7, 32.9, 30.8, 31.6], 290, ORANGE, "s")
+rect(s, 8.2, 1.65, 4.5, 1.1, ORANGE)
+add_text(s, 8.45, 1.9, 4.0, 0.35, "ECT-only mean: 30.79 s", 20, WHITE, True)
+add_text(s, 8.45, 2.35, 4.0, 0.25, "Weighted Metric: 32.87 s", 13, "EAF0F6")
+rect(s, 8.2, 3.05, 4.5, 1.1, LIGHT)
+add_text(s, 8.45, 3.28, 4.0, 0.35, "ECT-only p95: 67.41 s", 20, INK, True)
+add_text(s, 8.45, 3.73, 4.0, 0.25, "Weighted Metric: 87.03 s", 13, MUTED)
+rect(s, 8.2, 4.45, 4.5, 1.1, LIGHT)
+add_text(s, 8.45, 4.68, 4.0, 0.35, "ECT-only throughput: 3.607/s", 20, INK, True)
+add_text(s, 8.45, 5.13, 4.0, 0.25, "Weighted Metric: 2.830/s", 13, MUTED)
+
+# 10 --------------------------------------------------------------------------
+s = slide("All policies: baselines and ECT", notes=(
+    "This table shows every policy in the matched evaluation. The method preserves the simulator, workloads and "
+    "conventional baselines. ECT changes the decision signal, not the execution model."))
+headers = ["Policy", "Stable mean", "Stable p95", "Stable SLA", "Bursty mean", "Bursty p95", "Bursty SLA"]
+rows = [
+    ["Round Robin", "231.27", "1414.63", "56.6%", "256.44", "1536.55", "56.6%"],
+    ["Random", "243.82", "1471.71", "57.3%", "273.73", "1628.88", "56.8%"],
+    ["Weighted RR", "8.77", "23.80", "8.9%", "32.85", "71.22", "64.3%"],
+    ["P2C", "15.64", "52.41", "24.2%", "37.53", "101.60", "58.7%"],
+    ["Least CPU", "6.99", "16.80", "3.9%", "32.70", "81.83", "61.5%"],
+    ["Weighted Metric", "7.11", "16.00", "3.7%", "32.87", "87.03", "60.9%"],
+    ["ECT-only", "7.70", "14.21", "1.6%", "30.79", "67.41", "62.5%"],
+    ["Uncertainty ECT", "9.15", "16.00", "3.0%", "31.59", "68.01", "63.2%"],
 ]
-for i, (head, body) in enumerate(take):
-    y = 1.65 + i * 1.6
-    marker(s, M, y, str(i + 1))
-    text(s, M + 0.8, y - 0.03, 6.3, 0.45, head, size=20, bold=True, color=WHITE, font=HEAD)
-    text(s, M + 0.8, y + 0.48, 6.3, 0.9, body, size=15, color="CBD5E1")
-nx = 8.0
-box(s, nx, 1.55, W - M - nx, 4.85, fill="263A57")
-text(s, nx + 0.35, 1.8, W - M - nx - 0.7, 0.4, "WHERE VARIANCE SHOULD HELP", size=13, bold=True, color="F4A582")
-text(s, nx + 0.35, 2.35, W - M - nx - 0.7, 3.9, [
-    "Servers with **different** volatility (noisy neighbours)",
-    "Stale or sampled metrics, as in real monitoring",
-    "Risk computed **after** placing the candidate task",
-    "Real cluster traces, more servers and seeds",
-], size=16, color=WHITE, bullets=True, space=12)
+metric_table(s, M, 1.25, [2.4, 1.45, 1.35, 1.25, 1.45, 1.35, 1.25], headers, rows, 0.52, 10)
+add_text(s, M, 6.05, 11.8, 0.55,
+         "Lower is better for latency and SLA violation rate. ECT improves the completion-time tail, but its "
+         "uncertainty penalty is not yet a consistent gain.",
+         17, ORANGE, True, align=PP_ALIGN.CENTER)
 
-# ================================================================ 17 thanks
-s = new_slide("Thank you — questions?", dark=True, notes=(
-    "Point to the repository: code, 156 tests, decision log, full report and figures. Invite questions; the "
-    "interview notes contain prepared answers for the likely tough ones."))
-s.shapes.title.top = Inches(2.3)
-text(s, M, 3.45, 11, 0.6, "Code, tests, decision log, report and figures:", size=18, color="CBD5E1")
-text(s, M, 4.0, 11, 0.6, URL, size=22, color=WHITE, bold=True)
-text(s, M, 4.9, 11, 0.5, "Abhay Nagesh Rao  ·  M.Tech (CSE), NIT Warangal", size=16, color="9FB3CC")
+# 11 --------------------------------------------------------------------------
+s = slide("Uncertainty adds no consistent benefit yet", notes=(
+    "The important ablation is uncertainty-aware ECT versus ECT-only. Across five seeds, adding the tail "
+    "premium worsens mean response, p95 and SLA violation rate on both workloads. It slightly improves bursty "
+    "throughput, but not enough to establish a general benefit."))
+metric_table(s, M, 1.65, [2.6, 3.0, 3.0, 2.7], ["Workload", "Metric", "Δ: uncertainty − ECT", "Wins / 5"],
+             [
+                 ["Stable", "Mean response", "+1.454 s", "0"],
+                 ["Stable", "p95 response", "+1.790 s", "0"],
+                 ["Stable", "SLA violations", "+1.42 pp", "0"],
+                 ["Bursty", "Mean response", "+0.807 s", "0"],
+                 ["Bursty", "p95 response", "+0.600 s", "0 (2 ties)"],
+                 ["Bursty", "Throughput", "+0.0217/s", "3"],
+             ], 0.55, 12)
+rect(s, M, 5.75, 11.8, 0.8, NAVY)
+add_text(s, M + 0.25, 5.97, 11.3, 0.35,
+         "Current evidence supports ECT; it does not yet support claiming that uncertainty improves ECT.",
+         18, WHITE, True, align=PP_ALIGN.CENTER)
 
-assert counter["n"] == N_SLIDES, counter["n"]
-prs.core_properties.title = "Uncertainty-Aware Probabilistic Load Balancing"
-prs.core_properties.author = "Abhay Nagesh Rao"
-OUT.parent.mkdir(exist_ok=True)
+# 12 --------------------------------------------------------------------------
+s = slide("Why ECT is practical — and where it is limited", notes=(
+    "ECT is practical because it predicts from information available at dispatch. Its quality depends on duration "
+    "hints, task classes and historical service observations. On the "
+    "original workloads, work is independent of CPU and memory, so a global prior is weak."))
+rect(s, M, 1.55, 5.7, 4.75, NAVY)
+add_text(s, M + 0.35, 1.85, 4.9, 0.35, "Practical assumptions", 21, WHITE, True, font=HEAD)
+bullet_list(s, M + 0.35, 2.55, 4.8, [
+    "Task class or public duration estimate exists",
+    "Queue and resource reservations are observable",
+    "Completed service history updates prequentially",
+    "Forecast remains read-only",
+], 16, "CBD5E1", 0.73)
+rect(s, 6.95, 1.55, 5.45, 4.75, LIGHT)
+add_text(s, 7.3, 1.85, 4.7, 0.35, "Limitations", 21, INK, True, font=HEAD)
+bullet_list(s, 7.3, 2.55, 4.6, [
+    "Synthetic workloads and only five seeds",
+    "Duration estimates may be biased",
+    "No shared-CPU contention model",
+    "Bursts above capacity remain infeasible",
+], 16, MUTED, 0.73)
+
+# 13 --------------------------------------------------------------------------
+s = slide("What the evaluation supports", dark=True, notes=(
+    "State the claim narrowly. The project demonstrates that task-aware completion-time prediction is promising "
+    "in this simulator. It does not demonstrate universal superiority or production readiness."))
+add_text(s, M, 1.6, 6.7, 0.5, "Supported conclusion", 16, "F4A582", True)
+add_text(s, M, 2.15, 6.6, 1.3,
+         "Practical ECT improves the decision signal by modelling the incoming task’s predicted completion time, "
+         "including queue wait and resource fit.",
+         24, WHITE, True, font=HEAD)
+add_text(s, M, 4.05, 6.5, 0.45, "Not yet supported", 16, "F4A582", True)
+add_text(s, M, 4.55, 6.5, 1.0,
+         "That the uncertainty penalty consistently improves ECT or that the method generalises to production systems.",
+         20, "CBD5E1")
+rect(s, 8.1, 1.75, 4.3, 3.8, "203650")
+add_text(s, 8.45, 2.05, 3.6, 0.35, "Next experiments", 19, WHITE, True, font=HEAD)
+bullet_list(s, 8.45, 2.75, 3.45, [
+    "30–50 held-out seeds",
+    "Noisy duration estimates",
+    "Different server volatility",
+    "Stale telemetry",
+    "Background workloads",
+], 15, "CBD5E1", 0.52)
+
+# 14 --------------------------------------------------------------------------
+s = slide("Takeaways", notes=(
+    "Close with three points: the simulator and baselines remain fair; ECT is the new practical decision "
+    "signal; and uncertainty is an open empirical question rather than a guaranteed improvement."))
+takeaways = [
+    ("1", "Load-aware baselines beat blind assignment", "Queues and heterogeneous capacity dominate the outcome."),
+    ("2", "ECT improves task placement", "It forecasts completion rather than scoring servers in isolation."),
+    ("3", "Uncertainty remains a hypothesis", "The current five-seed ablation is mixed-to-negative."),
+]
+for i, (n, head, body) in enumerate(takeaways):
+    y = 1.65 + i * 1.45
+    rect(s, M, y, 11.8, 1.05, LIGHT)
+    rect(s, M + 0.2, y + 0.2, 0.6, 0.6, ORANGE)
+    add_text(s, M + 0.2, y + 0.34, 0.6, 0.25, n, 16, WHITE, True, align=PP_ALIGN.CENTER)
+    add_text(s, M + 1.05, y + 0.2, 4.2, 0.35, head, 20, INK, True, font=HEAD)
+    add_text(s, M + 5.25, y + 0.25, 6.0, 0.35, body, 16, MUTED)
+
+# 15 --------------------------------------------------------------------------
+s = slide("Thank you — questions?", dark=True, notes=(
+    "Invite questions about the information contract, shadow queue semantics, the ECT objective, or the "
+    "evaluation design."))
+add_text(s, M, 2.2, 10.8, 0.85, "Task-aware prediction from dispatch-time information.", 31, WHITE, True, font=HEAD)
+add_text(s, M, 3.35, 9.5, 0.55,
+         "Uncertainty-Aware Predictive Task Placement", 21, "CBD5E1")
+add_text(s, M, 5.75, 10.0, 0.35,
+         "github.com/Abhay0912/uncertainty-aware-load-balancer", 15, "9FB3CC")
+
 prs.save(OUT)
-print("saved", OUT)
+print(f"Wrote {OUT} ({len(prs.slides)} slides)")

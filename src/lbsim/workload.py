@@ -10,7 +10,7 @@ import numpy as np
 
 from lbsim.config import SERVERS, WORKLOAD, ServerSpec, WorkloadConfig
 
-WorkloadKind = Literal["stable", "bursty"]
+WorkloadKind = Literal["stable", "bursty", "heterogeneous"]
 Interval = tuple[int, int]
 
 
@@ -21,6 +21,8 @@ class Task:
     cpu_demand: float
     mem_demand: float
     work: float
+    task_class: str | None = None
+    estimated_work: float | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -82,8 +84,11 @@ def generate_workload(
     cfg: WorkloadConfig = WORKLOAD,
     servers: tuple[ServerSpec, ...] = SERVERS,
 ) -> Workload:
-    if kind not in ("stable", "bursty"):
+    if kind not in ("stable", "bursty", "heterogeneous"):
         raise ValueError(f"unknown workload kind: {kind!r}")
+
+    if kind == "heterogeneous":
+        return _generate_heterogeneous(seed, cfg, servers)
 
     streams = np.random.SeedSequence(seed).spawn(5)
     burst_rng, arrival_rng, cpu_rng, mem_rng, work_rng = (np.random.default_rng(s) for s in streams)
@@ -105,3 +110,41 @@ def generate_workload(
         for i, (a, c, m, w) in enumerate(zip(arrivals, cpu, mem, work))
     )
     return Workload(kind=kind, seed=seed, tasks=tasks, rate_per_tick=rate, bursts=bursts)
+
+
+def _generate_heterogeneous(
+    seed: int, cfg: WorkloadConfig, servers: tuple[ServerSpec, ...]
+) -> Workload:
+    """Matched-mean benchmark with visible job classes and noisy duration hints."""
+    streams = np.random.SeedSequence([seed, 991]).spawn(5)
+    arrival_rng, class_rng, resource_rng, work_rng, hint_rng = (
+        np.random.default_rng(s) for s in streams
+    )
+    rate = arrival_rate("stable", cfg, base_rate(cfg, servers), ())
+    arrivals = np.repeat(np.arange(cfg.t_sim), arrival_rng.poisson(rate))
+    classes = np.array(("short", "medium", "long", "cpu_heavy", "memory_heavy"), dtype=object)
+    task_classes = class_rng.choice(classes, size=arrivals.size, p=(0.30, 0.30, 0.15, 0.125, 0.125))
+    means = {"short": 2.0, "medium": 6.0, "long": 14.0, "cpu_heavy": 7.0, "memory_heavy": 7.0}
+    cpu = resource_rng.uniform(cfg.cpu_low, cfg.cpu_high, arrivals.size)
+    mem = resource_rng.uniform(cfg.mem_low, cfg.mem_high, arrivals.size)
+    cpu = np.where(task_classes == "cpu_heavy", np.minimum(cpu * 1.8, 1.9), cpu)
+    mem = np.where(task_classes == "memory_heavy", np.minimum(mem * 1.8, 3.8), mem)
+    log_sigma = cfg.work_sigma * 0.65
+    work = np.array([
+        max(cfg.work_min, float(work_rng.lognormal(math.log(means[c]) - log_sigma**2 / 2, log_sigma)))
+        for c in task_classes
+    ])
+    hints = np.array([
+        max(cfg.work_min, means[c] * float(hint_rng.lognormal(0.0, cfg.class_hint_noise)))
+        for c in task_classes
+    ])
+    tasks = tuple(
+        Task(
+            id=i, arrival_tick=int(a), cpu_demand=float(c), mem_demand=float(m),
+            work=float(w), task_class=str(cls), estimated_work=float(h),
+        )
+        for i, (a, c, m, w, cls, h) in enumerate(zip(
+            arrivals, cpu, mem, work, task_classes, hints
+        ))
+    )
+    return Workload(kind="heterogeneous", seed=seed, tasks=tasks, rate_per_tick=rate, bursts=())

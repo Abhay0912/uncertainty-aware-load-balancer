@@ -42,6 +42,13 @@ def response_quantile(tasks: pd.DataFrame, q: float) -> float:
     return float(r.quantile(q)) if len(r) else NAN
 
 
+def goodput(tasks: pd.DataFrame, r_sla: float, arrival_horizon: int) -> float:
+    if arrival_horizon <= 0:
+        return NAN
+    completed = _completed_response(tasks)
+    return float((completed <= r_sla).sum()) / arrival_horizon
+
+
 def throughput(tasks: pd.DataFrame, n_ticks: int) -> float:
     """Completed tasks per tick (= per second) over the whole run, drain included."""
     if n_ticks <= 0:
@@ -109,16 +116,24 @@ def evaluate(
         "makespan": res.n_ticks,
         "mean_response_s": mean_response_time(t),
         "p95_response_s": response_quantile(t, 0.95),
+        "p99_response_s": response_quantile(t, 0.99),
         "throughput": throughput(t, res.n_ticks),
+        "goodput": goodput(t, r_sla, t_sim),
         "sla_violation_rate": sla_violation_rate(t, r_sla),
         "avg_cpu_util": avg_cpu_utilisation(window),
+        "avg_mem_util": float(window["mem_pct"].mean()) if len(window) else NAN,
         "load_imbalance": load_imbalance(window),
+        "mean_queue_length": float(window["queue_length"].mean()) if len(window) else NAN,
+        "drain_ticks": max(0, res.n_ticks - t_sim),
         "overload_frac_util": overload_fraction(window, cfg.theta_cpu, cfg.theta_mem, "cpu_pct", "mem_pct"),
         "overload_frac_load": overload_fraction(
             window, cfg.theta_cpu, cfg.theta_mem, "cpu_load_pct", "mem_load_pct"
         ),
         "mean_p_risk": mean_decision_field(t, "p_risk"),
         "capacity_pressure_rate": mean_decision_field(t, "capacity_pressure"),
+        "mean_prediction_s": mean_decision_field(t, "predicted_ect_s"),
+        "mean_prediction_q90_s": mean_decision_field(t, "predicted_q90_s"),
+        "mean_uncertainty_premium_s": mean_decision_field(t, "uncertainty_premium_s"),
     }
 
 

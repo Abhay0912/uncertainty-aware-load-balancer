@@ -31,6 +31,9 @@ class Policy(ABC):
         """Extra fields about the last decision to log with the task (e.g. p_risk, capacity_pressure)."""
         return {}
 
+    def observe_completion(self, task: "Task", server_id: int, service_ticks: int, speed: float) -> None:
+        """Receive post-completion data; practical policies never see it before dispatch."""
+
 
 class RandomizedPolicy(Policy):
     """Owns a seeded Generator; reset() rewinds it so repeated runs make the same draws."""

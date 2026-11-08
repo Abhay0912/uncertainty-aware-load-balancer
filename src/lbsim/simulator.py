@@ -18,6 +18,7 @@ import pandas as pd
 from lbsim.config import SCORING, SERVERS, SIMULATION, ScoringConfig, ServerSpec, SimulationConfig
 from lbsim.policies.base import Policy
 from lbsim.server import Server, TaskRun, build_servers
+from lbsim.scheduling_view import make_server_views, task_request
 from lbsim.workload import Task
 
 TASK_COLUMNS = [
@@ -68,7 +69,7 @@ def simulate(
 
         while next_task < len(tasks) and tasks[next_task].arrival_tick <= tick:
             task = tasks[next_task]
-            sid = policy.select(servers, task)
+            sid = policy.select(make_server_views(servers, tick), task_request(task))
             if not 0 <= sid < len(servers):
                 raise ValueError(f"{policy.name} returned invalid server index {sid}")
             target = servers[sid]
@@ -90,7 +91,11 @@ def simulate(
                  s.n_running, s.queue_length, s.completed)
             )
         for s in servers:
-            s.step(tick)
+            finished = s.step(tick)
+            for run in finished:
+                policy.observe_completion(
+                    run.task, s.id, run.finish_tick - run.start_tick, s.spec.speed
+                )
         tick += 1
 
     return SimulationResult(

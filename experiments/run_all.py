@@ -50,9 +50,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seeds", type=int, nargs="+", default=list(EXPERIMENT.seeds))
     parser.add_argument("--out", type=Path, default=RESULTS_DIR)
+    parser.add_argument("--limit", type=int, default=None, help="cap tasks per matched trace")
     args = parser.parse_args(argv)
 
-    runs = run_matrix(EXPERIMENT.workloads, args.seeds)
+    if args.limit is None:
+        runs = run_matrix(EXPERIMENT.workloads, args.seeds)
+    else:
+        rows = []
+        for kind in EXPERIMENT.workloads:
+            for seed in args.seeds:
+                wl = generate_workload(kind, seed)
+                tasks = wl.tasks[:args.limit]
+                print(f"{kind:>6} seed {seed}: {len(tasks)} tasks")
+                for policy in all_policies(seed):
+                    rows.append({"workload": kind, "seed": seed, **evaluate(simulate(tasks, policy))})
+        runs = pd.DataFrame(rows)
     summary = summarise_runs(runs)
     paired = paired_differences(runs, TARGET, ABLATION)
 
